@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyTargetedEdits } from '@/floor/targetedRewrite';
+import { applyTargetedEdits, validateTargetedFootwear } from '@/floor/targetedRewrite';
 import type { ImageTagContent } from '@/st/imageTagRegex';
 
 const base: ImageTagContent = {
@@ -33,5 +33,11 @@ describe('applyTargetedEdits', () => {
   it('拒绝原词不匹配和 NovelAI 不生效的画面负面字段', () => {
     expect(() => applyTargetedEdits(base, [{ field: 'tag', old: 'pine', next: 'bamboo' }])).toThrow();
     expect(() => applyTargetedEdits(base, [{ field: 'negative', old: '', next: 'leaves' }], false)).toThrow();
+  });
+  it('给指定角色穿鞋时拒绝仍保留赤脚描述', () => {
+    const next = { ...base, characters: [{ ...base.characters[0], tag: 'girl, barefoot, cloth boots' }, base.characters[1]] };
+    expect(() => validateTargetedFootwear(next, '给 A 穿上鞋', 'A')).toThrow('仍被描述为赤脚');
+    next.characters[0].tag = 'girl, cloth boots';
+    expect(() => validateTargetedFootwear(next, '给 A 穿上鞋', 'A')).not.toThrow();
   });
 });

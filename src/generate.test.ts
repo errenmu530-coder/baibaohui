@@ -331,25 +331,23 @@ describe('generateImage', () => {
       params: { sampler: 'k_euler', steps: 28, cfg: 5 },
     });
   });
-  it('聚焦重绘只向 NAI 发送局部请求词，不发送整图人数与完整角色提示词', async () => {
+  it('普通局部重绘向 NAI 发送修改后的完整提示词和角色词', async () => {
     naiReady('nai-diffusion-5-full');
     const out = await generateImage({
       prompt: '1boy 1girl, lakeside, full body',
       nl: 'Two people stand beneath a tree.',
       characters: [{ name: '苏灿灿', tag: 'girl, long hair, soft boots', nl: 'She stands beside a boy.' }],
       seed: 5,
-      inpaint: { image: 'a', mask: 'b', width: 1024, height: 1024, strength: 0.75,
-        localPrompt: { tag: 'feet in soft cloth boots, lower legs, pebbles',
-          nl: 'The boots fit the existing feet.' } },
+      inpaint: { image: 'a', mask: 'b', width: 1024, height: 1024, strength: 0.75 },
     });
     expect(vi.mocked(generateNaiImage).mock.calls[0][1]).toMatchObject({
-      prompt: 'feet in soft cloth boots, lower legs, pebbles',
-      nl: 'The boots fit the existing feet.',
-      characters: [],
+      prompt: '1boy 1girl, lakeside, full body',
+      nl: 'Two people stand beneath a tree.',
+      characters: [{ name: '苏灿灿', tag: 'girl, long hair, soft boots', nl: 'She stands beside a boy.' }],
     });
-    expect(out.charactersApplied).toBe(false);
+    expect(out.charactersApplied).toBe(true);
     expect(out.meta.promptSnapshot?.tag).toContain('1boy 1girl');
-    expect(out.meta.params.focusPrompt).toContain('soft cloth boots');
+    expect(out.meta.params.focusPrompt).toBeUndefined();
   });
 
   it('snapshots the ComfyUI simple-mode recipe (loras/sampler/size) into output.meta', async () => {

@@ -16,7 +16,7 @@ const maskEl = ref<HTMLCanvasElement | null>(null);
 const viewportEl = ref<HTMLDivElement | null>(null);
 const instruction = ref('');
 const strength = ref(0.95);
-const brush = ref(35);
+const brush = ref(18);
 const mode = ref<'brush' | 'focus'>('focus');
 const painting = ref(false);
 const hasMask = ref(false);
@@ -309,7 +309,7 @@ function apply(): void {
     <div class="bbi-modal bbi-inpaint" role="dialog" aria-modal="true" aria-label="NovelAI 局部重绘">
       <header class="bbi-modal-head"><span class="bbi-modal-title">NovelAI 局部重绘</span><button type="button" class="bbi-icon-mini" :title="busy ? '关闭窗口，后台继续生成' : '关闭'" @click="emit('close')">×</button></header>
       <p class="bbi-inpaint-help">整张原图和遮罩交给 NovelAI；返回的整张图直接保存，不再裁切和贴回。</p>
-      <p class="bbi-inpaint-help">画框后可切换到涂抹，只重绘框内刷到的位置；不涂抹则重绘整个框。双指缩放和移动图片，单指画框或涂抹。</p>
+      <p class="bbi-inpaint-help">画框后可切换到涂抹，只重绘框内刷到的位置；不涂抹则重绘整个框。双指缩放和移动，单指绘制。要改鞋时请缩小画笔，只覆盖鞋和脚，避免把周围地面涂进遮罩。</p>
       <div class="bbi-inpaint-modes"><button type="button" :disabled="busy" :aria-pressed="mode === 'brush'" @click="mode = 'brush'">涂抹</button><button type="button" :disabled="busy" :aria-pressed="mode === 'focus'" @click="mode = 'focus'">画聚焦框</button><span class="bbi-inpaint-current">当前：{{ mode === 'focus' ? '画聚焦框' : '涂抹' }}</span></div>
       <p v-if="focusBox && hasMask" class="bbi-inpaint-selection">保留聚焦框；只重绘框内蓝色涂抹区域</p>
       <p v-else-if="focusBox && focusBox.width >= 8 && focusBox.height >= 8" class="bbi-inpaint-selection">未涂抹时将重绘整个蓝色框</p>

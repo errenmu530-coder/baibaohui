@@ -57,7 +57,7 @@ export interface GenerateInput {
    */
   comic?: ComicLayout;
   /** NovelAI 局部重绘输入。 */
-  inpaint?: { image: string; mask: string; width: number; height: number; strength: number; localPrompt?: { tag: string; nl: string } };
+  inpaint?: { image: string; mask: string; width: number; height: number; strength: number };
 }
 
 /** 生成过程中的进度上报(卡片用它显示排队位置与退避进度)。 */
@@ -225,7 +225,7 @@ export async function generateImage(
   const isNai = status.backend === 'nai';
   const characters = input.characters ?? [];
   // 支持与否由后端说了算:ComfyUI 恒不支持;NAI 看模型是否 4.5/V5
-  const charactersApplied = characters.length > 0 && status.supportsCharacters && !input.inpaint?.localPrompt;
+  const charactersApplied = characters.length > 0 && status.supportsCharacters;
 
   let release: (() => void) | null = null;
   try {
@@ -245,9 +245,9 @@ export async function generateImage(
         effectiveNai(),
         // characters 原样透传:不支持的模型由 buildNaiParameters 自己滤掉(同一口径
         // naiSupportsCharacterPrompts),在这儿再滤一遍只会多一处会漂的判据
-        { prompt: input.inpaint?.localPrompt?.tag ?? input.prompt,
-          nl: input.inpaint?.localPrompt?.nl ?? input.nl ?? '',
-          characters: (input.inpaint?.localPrompt ? [] : characters).map(character => {
+        { prompt: input.prompt,
+          nl: input.nl ?? '',
+          characters: characters.map(character => {
           const negative = character.negative ?? findCharTag(character.name)?.negative;
           return negative ? { ...character, negative } : character;
         }), seed: input.seed, size, inpaint: input.inpaint },
@@ -256,9 +256,6 @@ export async function generateImage(
       );
       result = output.result;
       meta = { backend: 'nai', model: input.inpaint ? naiInpaintModel(status.model) : status.model, ...output.usage };
-      if (input.inpaint?.localPrompt) meta.params.focusPrompt = [
-        input.inpaint.localPrompt.tag, input.inpaint.localPrompt.nl,
-      ].filter(Boolean).join('. ');
     } else {
       let conn = effectiveComfyConn();
       // 尺寸解析口径与 generateComfyImage 一致（未解析出时 0 = 用工作流自带尺寸）。

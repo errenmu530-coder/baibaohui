@@ -30,7 +30,6 @@ import { confirmImageMissing, isImageMissing } from '@/floor/missingImages';
 import { cancelTargetedRewrite, openPromptEditor } from '@/floor/promptEditor';
 import InpaintEditor from '@/floor/InpaintEditor.vue';
 import type { FocusRect } from '@/floor/inpaintSelection';
-import { requestFocusedPrompt } from '@/floor/focusedPrompt';
 import { requestTargetedRewrite } from '@/floor/targetedRewrite';
 import { charTagsBeforeFloor } from '@/state/charTags';
 import {
@@ -363,13 +362,6 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
       job.nl = edited.nl;
       job.negative = edited.negative;
       job.characters = edited.characters;
-    }
-    if (inpaint) {
-      const localPrompt = await requestFocusedPrompt(
-        { tag: job.prompt, nl: job.nl, negative: job.negative, characters: job.characters, size: job.size },
-        inpaint.instruction, inpaint.targetCharacter, signal,
-      );
-      job.inpaint = { ...job.inpaint!, localPrompt };
     }
     const historyPrompt = job.comic ? promptText.value : job.prompt;
     // 发起时就确定种子(NAI 方案种子 > 0 时用固定值;否则随机),随结果落盘进 extra

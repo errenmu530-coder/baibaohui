@@ -34,6 +34,14 @@ export function applyTargetedEdits(base: ImageTagContent, edits: Edit[], allowNe
   return next;
 }
 
+export function validateTargetedFootwear(next: ImageTagContent, instruction: string, targetCharacter?: string): void {
+  if (!targetCharacter || !/(穿上|穿着|换上|给.{0,8}穿|put on|wear.{0,12}(?:shoes?|boots?))/i.test(instruction) ||
+    /(脱鞋|脱掉|不穿|赤脚|barefoot)/i.test(instruction)) return;
+  const character = next.characters.find(item => item.name === targetCharacter);
+  if (character && /\b(?:bare\s+feet|barefoot|unshod|without shoes?)\b/i.test(`${character.tag} ${character.nl}`))
+    throw new Error(`角色「${targetCharacter}」仍被描述为赤脚，请同时替换原提示词中的赤脚描述`);
+}
+
 export async function requestTargetedRewrite(base: ImageTagContent, instruction: string, signal?: AbortSignal, targetCharacter?: string): Promise<ImageTagContent> {
   const allowNegative = settings.defaultBackend !== 'nai';
   const messages: ChatMsg[] = [
@@ -48,6 +56,7 @@ export async function requestTargetedRewrite(base: ImageTagContent, instruction:
       if (!candidate) throw new Error('AI 没有返回局部修改 JSON');
       const object = JSON.parse(candidate) as { edits?: Edit[] };
       edited = applyTargetedEdits(base, object.edits ?? [], allowNegative, targetCharacter);
+      validateTargetedFootwear(edited, instruction, targetCharacter);
     } catch (error) {
       validationError = error instanceof Error ? error.message : String(error);
       throw error;
