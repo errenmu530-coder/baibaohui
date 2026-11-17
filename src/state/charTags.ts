@@ -38,7 +38,7 @@ export const CHAR_TAG_FIELD_LABELS: Record<CharTagField, string> = {
 };
 
 export type CharTagSource = 'book' | 'manual' | 'ai';
-export type CharTagHistoryField = CharTagField | 'new' | 'raw' | 'nl' | 'negative';
+export type CharTagHistoryField = CharTagField | 'new' | 'raw' | 'nl';
 
 export interface CharTagChangeRecord {
   field: CharTagHistoryField;
@@ -52,7 +52,7 @@ export interface CharTagChangeRecord {
 
 export interface CharTagEntry {
   name: string;
-  /** 用户维护的角色负面词，独立于正向外貌字段；旧档案可省略。 */
+  /** 用户为此角色单独设置的负面提示词；自动外貌更新不得覆盖。 */
   negative?: string;
   fields: Record<CharTagField, string>;
   raw: string;
@@ -168,7 +168,7 @@ export function buildEntryTag(entry: Pick<CharTagEntry, 'fields' | 'raw'>): stri
 }
 
 function isHistoryField(value: string): value is CharTagHistoryField {
-  return (CHAR_TAG_FIELDS as readonly string[]).includes(value) || value === 'new' || value === 'raw' || value === 'nl' || value === 'negative';
+  return (CHAR_TAG_FIELDS as readonly string[]).includes(value) || value === 'new' || value === 'raw' || value === 'nl';
 }
 
 function isSetField(value: string): value is CharTagSetOp['field'] {
@@ -219,7 +219,8 @@ function normalizeEntry(raw: unknown): CharTagEntry | null {
     fields,
     raw: rawTag,
     nl: typeof value.nl === 'string' ? value.nl.trim() : '',
-    ...(typeof value.negative === 'string' && value.negative.trim() ? { negative: value.negative.trim() } : {}),
+    ...(typeof value.negative === 'string' && value.negative.trim()
+      ? { negative: value.negative.trim() } : {}),
     source: value.source === 'book' || value.source === 'ai' ? value.source : 'manual',
     desc: typeof value.desc === 'string' ? value.desc : '',
     history: normalizeHistory(value.history),
@@ -508,7 +509,7 @@ export function upsertCharTag(
     fields: normalizeFields(entry.fields),
     raw: entry.raw.trim(),
     nl: entry.nl.trim(),
-    ...(entry.negative?.trim() ? { negative: entry.negative.trim() } : {}),
+    negative: entry.negative?.trim() ?? '',
     source: entry.source,
     desc: entry.desc,
     history: entry.history.length
@@ -517,9 +518,6 @@ export function upsertCharTag(
   };
   if (opts.recordChanges && previous) {
     const at = Date.now();
-    if ((previous.negative ?? '') !== (next.negative ?? '')) {
-      pushHistory(next, { field: 'negative', from: previous.negative ?? '', to: next.negative ?? '', reason: '手动编辑', floor: -1, at });
-    }
     for (const field of CHAR_TAG_FIELDS) {
       if (previous.fields[field] !== next.fields[field]) {
         pushHistory(next, {
@@ -571,7 +569,6 @@ export function rollbackCharTag(name: string, record: CharTagChangeRecord): bool
   const next = cloneEntry(current);
   if (record.field === 'raw') next.raw = record.from;
   else if (record.field === 'nl') next.nl = record.from;
-  else if (record.field === 'negative') next.negative = record.from;
   else next.fields[record.field] = record.from;
   next.source = 'manual';
   next.desc = '';

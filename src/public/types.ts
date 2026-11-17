@@ -34,8 +34,6 @@ export interface PublicCapabilities {
 export type PublicCharacterFields = Record<CharTagField, string>;
 
 export interface PublicCharacter {
-  /** 用户保存的角色负面词；缺省为空，NAI 会按 name 自动读取角色库。 */
-  negative?: string;
   /** 角色名。**逐字原样**,不音译不规范化(生图 tag 与正文靠它对齐)。 */
   name: string;
   /**

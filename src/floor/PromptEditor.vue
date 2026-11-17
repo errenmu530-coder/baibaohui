@@ -29,6 +29,11 @@ const props = defineProps<{
   historyCount: number;
   /** 后端是否已配置好(未配置时「应用并重新生成」不可点)。 */
   configured: boolean;
+  /**
+   * 这条 tag 与当前方案类型对不上(典型:插画 tag 遇上漫画方案)。非空时 AI 重写与
+   * 「应用并重新生成」不可点——重写会按当前方案出一条对不上号的 tag,出图则注定被拒。
+   */
+  blockedReason?: string;
   /** 忙碌中(写回正在进行):禁用底部按钮,避免连点写两次。 */
   busy?: boolean;
   /**
@@ -52,7 +57,7 @@ const emit = defineEmits<{
   /** 应用;regenerate=true 表示写回后直接开跑出图。 */
   (e: 'apply', value: ImageTagContent, regenerate: boolean): void;
   /** 请求 AI 重写这一张的提示词(落盘与出图由调用方做,本组件只负责把结果读回草稿)。 */
-  (e: 'rewrite'): void;
+  (e: 'rewrite', instruction: string): void;
   /** 取消在途的 AI 重写。 */
   (e: 'cancel-rewrite'): void;
   /** 草稿是否已改动(调用方据此决定关窗前要不要问「放弃修改?」)。 */
@@ -70,6 +75,7 @@ const open = ref(false);
 const tag = ref(props.content.tag);
 const nl = ref(props.content.nl);
 const negative = ref(props.content.negative);
+const rewriteInstruction = ref('');
 const size = ref<Orientation>(props.content.size);
 const characters = ref<ImageCharacterPrompt[]>(
   props.content.characters.map(character => ({ ...character })),
@@ -153,6 +159,11 @@ const error = computed(() => {
 
 const canApply = computed(() => !error.value && !props.busy && !props.rewriting);
 
+/** AI 重写与「应用并重新生成」不可用的原因;空 = 可用。 */
+const drawBlocked = computed(
+  () => props.blockedReason || (props.configured ? '' : '请先在柏宝绘「渠道」页完成配置'),
+);
+
 /**
  * AI 重写落盘后,把新提示词读回输入框。
  *
@@ -186,8 +197,9 @@ function apply(regenerate: boolean): void {
 }
 
 function rewrite(): void {
-  if (props.busy || props.rewriting || !props.configured) return;
-  emit('rewrite');
+  if (props.busy || props.rewriting || drawBlocked.value) return;
+  if (!rewriteInstruction.value.trim()) return;
+  emit('rewrite', rewriteInstruction.value.trim());
 }
 
 /**
@@ -248,19 +260,17 @@ onBeforeUnmount(() => {
       <!-- AI 重写:手改与 AI 改是同一件事的两种手段,故聚在同一个弹窗里。
            跑完直接落盘并出图(见 promptEditor.ts),结果回填到下面的输入框。 -->
       <div class="bbi-rewrite-row">
+        <BbiTextarea v-if="!rewriting" v-model="rewriteInstruction" class="bbi-rewrite-instruction" :rows="2" :max-rows="5"
+          placeholder="用自然语言描述想改哪里，例如：把这张图里小雪的头发画长一些，其他保持不变" />
         <button
           v-if="!rewriting"
           class="bbi-btn bbi-btn-sm"
           type="button"
-          :disabled="busy || !configured"
-          :title="
-            configured
-              ? '让 AI 重读本楼正文，把这一张的提示词重写一遍'
-              : '请先在柏宝绘「渠道」页完成配置'
-          "
+          :disabled="busy || !!drawBlocked || !rewriteInstruction.trim()"
+          :title="drawBlocked || '让 AI 重读本楼正文，把这一张的提示词重写一遍'"
           @click="rewrite"
         >
-          <Icon name="sparkles" /> AI 重写提示词
+          <Icon name="sparkles" /> 按要求修改并重新生图
         </button>
         <template v-else>
           <span class="bbi-rewrite-busy">
@@ -405,8 +415,8 @@ onBeforeUnmount(() => {
         <button
           class="bbi-btn bbi-btn-primary"
           type="button"
-          :disabled="!canApply || !configured"
-          :title="configured ? '保存提示词并立即出图' : '请先在柏宝绘「渠道」页完成配置'"
+          :disabled="!canApply || !!drawBlocked"
+          :title="drawBlocked || '保存提示词并立即出图'"
           @click="apply(true)"
         >
           <Icon name="palette" /> 应用并重新生成
@@ -481,6 +491,11 @@ onBeforeUnmount(() => {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.bbi-rewrite-instruction {
+  flex: 1 1 100%;
+  width: 100%;
 }
 
 .bbi-rewrite-busy {

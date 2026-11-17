@@ -1,8 +1,8 @@
-import { requestFloorTags } from '@/autoTag/runner';
+import { requestFloorTags, requestSelectedTextTag } from '@/autoTag/runner';
 import { confirmDialog } from '@/components/confirm';
 import { ensureChatObserver, onChatMutation } from '@/floor/chatObserver';
 import { isCurrentChatExcluded, settings } from '@/state/settings';
-import { getContext, isAiStoryMessage } from '@/st/context';
+import { getContext, isAiStoryMessage, isStoryMessage } from '@/st/context';
 import { hasImageTagTrace } from '@/st/imageTagRegex';
 
 /**
@@ -26,6 +26,7 @@ import { hasImageTagTrace } from '@/st/imageTagRegex';
  */
 
 const BUTTON_CLASS = 'bbi-tag-action';
+const SELECT_BUTTON_CLASS = 'bbi-select-action';
 // 与扩展菜单入口同款调色板图标
 const ICON_CLASS = 'fa-palette';
 
@@ -92,6 +93,42 @@ function createButton(): HTMLDivElement {
   return button;
 }
 
+function createSelectButton(): HTMLDivElement {
+  const button = document.createElement('div');
+  button.className = `mes_button fa-solid fa-crop ${SELECT_BUTTON_CLASS}`;
+  button.title = '选中文字生图：先在本楼选中一段文字，再点这里';
+  button.setAttribute('role', 'button');
+  button.setAttribute('tabindex', '0');
+  let selection = '';
+  const capture = () => {
+    const current = window.getSelection();
+    const anchor = current?.anchorNode;
+    const focus = current?.focusNode;
+    const floor = button.closest('.mes');
+    selection = anchor && focus && floor?.contains(anchor) && floor.contains(focus)
+      ? current?.toString().trim() ?? '' : '';
+  };
+  button.addEventListener('pointerdown', capture);
+  const activate = () => {
+    if (!selection) capture();
+    if (!selection) {
+      toastr.warning('请先在当前楼层正文中选中要画的文字', '柏宝绘');
+      return;
+    }
+    const floor = Number(button.closest('.mes')?.getAttribute('mesid'));
+    if (!Number.isInteger(floor) || button.dataset.running === '1') return;
+    const text = selection;
+    selection = '';
+    button.dataset.running = '1';
+    void requestSelectedTextTag(floor, text).finally(() => { button.dataset.running = ''; });
+  };
+  button.addEventListener('click', activate);
+  button.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
+  });
+  return button;
+}
+
 /**
  * 按钮与「谁该有按钮」对账(幂等、双向):该有的补,该撤的撤。
  *
@@ -113,8 +150,12 @@ function syncButtons(): void {
     // 顺带的好处:/hide 只翻属性、不动 DOM 树,本来就触发不了 observer,现在也无需触发。
     const wanted = !excluded && Number.isInteger(floor) && isAiStoryMessage(chat[floor]);
     const existing = extra.querySelector<HTMLElement>(`.${BUTTON_CLASS}`);
+    const selected = extra.querySelector<HTMLElement>(`.${SELECT_BUTTON_CLASS}`);
     if (wanted && !existing) extra.appendChild(createButton());
     else if (!wanted && existing && existing.dataset.running !== '1') existing.remove();
+    const selectWanted = !excluded && Number.isInteger(floor) && isStoryMessage(chat[floor]);
+    if (selectWanted && !selected) extra.appendChild(createSelectButton());
+    else if (!selectWanted && selected && selected.dataset.running !== '1') selected.remove();
   }
 }
 

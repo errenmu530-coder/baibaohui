@@ -202,7 +202,7 @@ function confirmEntry() {
   }
   const entryData: CharTagEntry = {
     name,
-    ...(d.negative.trim() ? { negative: d.negative.trim() } : {}),
+    negative: d.negative,
     fields: d.fields,
     raw: d.raw,
     nl: d.nl,
@@ -299,7 +299,6 @@ function fieldLabel(field: CharTagChangeRecord['field']): string {
   if (field === 'new') return '建档';
   if (field === 'raw') return '整串';
   if (field === 'nl') return '自然语言';
-  if (field === 'negative') return '角色负面提示词';
   return CHAR_TAG_FIELD_LABELS[field];
 }
 
@@ -381,7 +380,6 @@ function sourceLabel(entry: CharTagEntry): string {
                 </span>
               </span>
               <span v-else class="bbi-char-raw">{{ entry.raw }}</span>
-              <span v-if="entry.negative" class="bbi-char-raw">负面：{{ entry.negative }}</span>
             </button>
           </li>
           </ul>
@@ -447,7 +445,6 @@ function sourceLabel(entry: CharTagEntry): string {
                 </span>
               </span>
               <span v-else class="bbi-char-raw">{{ entry.raw }}</span>
-              <span v-if="entry.negative" class="bbi-char-raw">负面：{{ entry.negative }}</span>
             </button>
           </li>
           </ul>
@@ -550,15 +547,9 @@ function sourceLabel(entry: CharTagEntry): string {
 
         <label class="bbi-modal-field">
           <span class="bbi-modal-label">角色负面提示词(可选)</span>
-          <BbiTextarea
-            v-model="draft.negative"
-            :rows="2"
-            :max-rows="6"
-            mono
-            placeholder="如 fox ears, animal ears, tail；填写不希望该角色出现的特征"
-            @input="markManual"
-          />
-          <span class="bbi-field-hint">自动发送给 NovelAI 对应角色的负面栏位，按画面中的角色名匹配；不混入正向 tag 或全局负面词。需使用支持角色提示的 NAI 4.5 / V5 模型；留空不附加。</span>
+          <BbiTextarea v-model="draft.negative" :rows="2" :max-rows="5" mono
+            placeholder="只写不希望这个角色出现的特征，例如 short hair" @input="markManual" />
+          <span class="bbi-field-hint">NAI 4.5 / V5 Full 的原生角色负面栏生效；V5 Full Medium 固定负面词，ComfyUI 当前工作流没有独立角色负面栏。</span>
         </label>
 
         <div class="bbi-char-preview">

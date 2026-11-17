@@ -2,6 +2,7 @@ import { requestCompletion, requestViaMainApi } from '@/api/client';
 import { readBookMemory } from '@/autoTag/bookMemory';
 import {
   applyPositionedCharRefs,
+  entriesAtPosition,
   resolveCharAnchors,
   type PositionedCharOp,
 } from '@/autoTag/charAnchors';
@@ -22,18 +23,22 @@ import {
   readCharTagFloorDelta,
   recomputeCharTags,
   type CharTagAutoOp,
+  type CharTagEntry,
   type CharTagField,
 } from '@/state/charTags';
-import { injectImageTags, parseImagePlan, type ImagePlan } from '@/autoTag/protocol';
+import { injectImageTags, parseComicPlan, parseImagePlan, type ImagePlan } from '@/autoTag/protocol';
+import { bakeAppearance, comicAppearance, type ComicLayout } from '@/backends/mossLayout';
 import {
   clearAutoGenerateForFloor,
   consumeAutoGenerate,
   markForAutoGenerate,
 } from '@/floor/autoGenerate';
 import { applyMessageText, type ApplyMessageResult } from '@/st/messageEdit';
-import { getContext, isAiStoryMessage, type STMessage } from '@/st/context';
+import { getContext, isAiStoryMessage, isStoryMessage, type STMessage } from '@/st/context';
 import {
   hasImageTagTrace,
+  imageTagKind,
+  parseImageTagContent,
   parseImageTags,
   replaceImageTagAt,
   serializeImageTag,
@@ -100,6 +105,8 @@ function textHash(text: string): string {
 }
 
 interface RunOptions {
+  /** 用户在楼层正文中明确选中的文字。 */
+  selectedText?: string;
   /** 手动触发(楼层按钮):绕过 autoTag.enabled 与 processed 去重;空结果也给出反馈。 */
   manual?: boolean;
   /** 重新生成:先把已有 tag 从正文剔除再分析/注入;旧图片保留在卡片历史里。 */
@@ -110,7 +117,7 @@ interface RunOptions {
    * slotPlan.buildSlotTaskNote。分析基底同样剔除全部旧 tag,但强制输出恰好 1 张,
    * 且忽略本次 AI 的 changes(首次全量分析已为整楼建过档)。
    */
-  slot?: { seq: number };
+  slot?: { seq: number; instruction?: string };
 }
 
 /** 放弃写入的用户可读原因。文本变化已不在其中——那是正常情况,会 rebase 后照常写入。 */
@@ -175,6 +182,20 @@ function planChangeOps(plan: ImagePlan): PositionedCharOp[] {
   return ops.sort((left, right) => left.sourceLine - right.sourceLine);
 }
 
+/**
+ * 漫画分镜里带 name 的人物:按库把固定外貌补进 caption。MOSS 靠逐字复用同一串词认人,
+ * 交给 AI 抄写迟早会漂;库里查不到的名字原样留着,收进 unknown 交给调用方告警。
+ */
+function bakeComicAppearance(layout: ComicLayout, entries: CharTagEntry[], unknown: Set<string>): void {
+  const byName = new Map(entries.map(entry => [entry.name, entry]));
+  for (const item of layout.items) {
+    if (item.label !== 'character' || !item.name) continue;
+    const entry = byName.get(item.name);
+    if (entry) item.caption = bakeAppearance(item.caption, comicAppearance(entry));
+    else unknown.add(item.name);
+  }
+}
+
 async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> {
   const context = getContext();
   diagnostic('runForFloor:enter', {
@@ -214,7 +235,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       }
     : null;
   // 与楼层按钮同一个谓词(st/context.ts):被 /hide 隐藏的普通楼算剧情楼,照样能跑
-  if (!isAiStoryMessage(message)) {
+  if (!(opts.selectedText ? isStoryMessage(message) : isAiStoryMessage(message))) {
     abort(floor, 'not-ai-story-message', opts.manual, '这一楼不是可插图的剧情楼层（用户楼 / ST 系统楼）', {
       message: messageDiagnostic,
     });
@@ -234,10 +255,20 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
     );
     return;
   }
+  // 漫画只提供整楼重新生成:当前方案是漫画,或要重写的这条本身是漫画 tag,都没有按槽位
+  // 重写的协议(卡片上也不给入口,这里兜底)。
+  if (
+    slot &&
+    slotRawTag !== undefined &&
+    (autoTagProfile().comic || imageTagKind(parseImageTagContent(slotRawTag)) === 'comic')
+  ) {
+    abort(floor, 'slot-comic', true, '漫画只支持整楼重新生成，不能单独重写某一页');
+    return;
+  }
   // 探测口径与按钮层同源(imageTagRegex.hasImageTagTrace):两侧漂移过一次——
   // 按钮只认开标签、这里认开也认闭,只剩 `</bbi_image>` 的楼就卡成「点了没反应」。
   // 单槽重写以「本楼已有 tag」为前提,不受此闸门拦截。
-  if (hasImageTagTrace(rawSource) && !opts.replace && !slot) {
+  if (hasImageTagTrace(rawSource) && !opts.replace && !slot && !opts.selectedText) {
     abort(
       floor,
       'already-has-image-tag',
@@ -249,7 +280,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
   }
   // replace / slot:分析都基于剔除旧 tag 后的正文。写回时 replace 让旧 tag 随之消失,
   // slot 按 seq 原位替换——别的 tag 在写回基底里原样保留。
-  const source = opts.replace || slot ? stripImageTags(rawSource) : rawSource;
+  const source = opts.replace || slot || opts.selectedText ? stripImageTags(rawSource) : rawSource;
   if (!source.trim()) {
     abort(floor, 'empty-source', opts.manual, '本楼正文是空的（或只剩生图 tag），没有可分析的内容');
     return;
@@ -306,11 +337,15 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
     // 单槽重写:协议强制「恰好 1 张」,并把该槽位当前提示词与其余槽位摘要带给模型
     // (锚住同一个画面、别抢别人的画面)。min/max 要同时覆盖 build 的规则文案与下面的
     // parse 校验,只改一处会自相矛盾。
-    const promptOptions = slot
+    const promptOptions = slot || opts.selectedText
       ? { ...settings.autoTag, minImages: 1, maxImages: 1 }
       : settings.autoTag;
     // 协议形态开跑时快照一次:写协议、验收与收尾同一份,用户中途拨开关也不会前后不一
     const profile = autoTagProfile();
+    if (opts.selectedText && profile.comic) {
+      abort(floor, 'selection-comic', true, '选中文字生图目前只支持插画方案');
+      return;
+    }
     const messages = await buildAutoTagMessages(
       context,
       floor,
@@ -318,7 +353,9 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       memory,
       preparedTarget,
       anchors.text,
-      slot ? buildSlotTaskNote(rawSource, slot.seq) : '',
+      slot ? `${buildSlotTaskNote(rawSource, slot.seq)}${slot.instruction ? `\n\n【用户对这张图的修改要求，优先于角色库中的对应外貌字段】\n${slot.instruction}\n只在这一张图的提示词中落实修改；保留其余角色和画面要素，不提交角色库 changes。` : ''}` : opts.selectedText
+        ? `【用户指定文字生图】只为以下选中文字生成恰好一张图片，不要自动挑选其他情节。选中文字：\n${opts.selectedText}`
+        : '',
       profile,
     );
     const channel = getTagGenChannel();
@@ -339,12 +376,15 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
         // (直接 let 会被 TS 收窄成 null:闭包内的赋值控制流分析看不见。)
         const parsed: { plan: ImagePlan | null } = { plan: null };
         const validate = (raw: string) => {
-          const candidate = parseImagePlan(
-            raw,
-            preparedTarget.segments,
-            promptOptions.minImages,
-            promptOptions.maxImages,
-          );
+          // 漫画不受张数上下限约束(页数由 AI 按内容定),只要求至少一页
+          const candidate = profile.comic
+            ? parseComicPlan(raw, preparedTarget.segments)
+            : parseImagePlan(
+                raw,
+                preparedTarget.segments,
+                promptOptions.minImages,
+                promptOptions.maxImages,
+              );
           // 单槽重写忽略本次 changes,不校验建档 nl —— 校验它会为一份会被丢弃的
           // changes 白白消耗重试次数。NAI 关了自然语言时协议不要 nl,也就不验。
           if (
@@ -402,7 +442,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
 
     // 单槽重写不落 changes:首次全量分析已为整楼建过档,这里再应用一次只会产生
     // 重复的建档/变更记录;库文本已含本楼增量(见上面 entriesBefore),AI 照抄即可。
-    const planOps = slot ? [] : planChangeOps(plan);
+    const planOps = slot || (opts.selectedText && hasImageTagTrace(rawSource)) ? [] : planChangeOps(plan);
     // 锁定角色(全局库)不接受 AI changes:丢弃,不写入楼层、不参与 @替换。
     // 重放侧 applyCharTagOps 也会按锁定名再拦一次(旧消息里可能已存这类 ops)。
     const effectiveOps = lockedNames.size
@@ -422,6 +462,14 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
         for (const character of image.characters) character.nl = '';
       }
       if (profile.lockedSize) image.size = profile.lockedSize;
+      if (image.layout) {
+        bakeComicAppearance(
+          image.layout,
+          entriesAtPosition(anchors.entries, effectiveOps, image.sourceLine, lockedNames),
+          unknownNames,
+        );
+        continue;
+      }
       const tagRes = applyPositionedCharRefs(
         image.tag,
         anchors.entries,
@@ -494,10 +542,12 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
     // 单槽重写是用户在卡片上的显式意图(同提示词编辑弹窗的「应用并重新生成」),
     // 不受 autoTag.autoGenerate 开关约束,一律 force 出图。
     const markSwipeId = message.swipe_id ?? 0;
-    const marked = plan.images.length > 0 && (settings.autoTag.autoGenerate || !!slot);
+    const marked = plan.images.length > 0 && (settings.autoTag.autoGenerate || !!slot || !!opts.selectedText);
     if (marked) {
       if (slot) {
         markForAutoGenerate(chatId, floor, markSwipeId, slot.seq, 'force');
+      } else if (opts.selectedText) {
+        markForAutoGenerate(chatId, floor, markSwipeId, parseImageTags(rawSource).length, 'force');
       } else {
         for (let seq = 0; seq < plan.images.length; seq++) {
           markForAutoGenerate(chatId, floor, markSwipeId, seq);
@@ -516,6 +566,11 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
         if (slot) {
           if (parseImageTags(currentText)[slot.seq] !== slotRawTag) return null;
           return replaceImageTagAt(currentText, slot.seq, serializeImageTag(plan.images[0]));
+        }
+        if (opts.selectedText && hasImageTagTrace(currentText)) {
+          if (!plan.images.length) return currentText;
+          if (parseImageTags(currentText).length !== parseImageTags(rawSource).length) return null;
+          return `${currentText.trimEnd()}\n${serializeImageTag(plan.images[0])}`;
         }
         // replace 路径同样以当前正文为基底剔除旧 tag,不能用旧快照
         const base = opts.replace ? stripImageTags(currentText) : currentText;
@@ -536,7 +591,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       swipeId,
       message,
       // 单槽不写法:本楼角色增量与其它槽位图片都不归它管,不传 extraUpdate 即保持原样。
-      slot
+      slot || (opts.selectedText && hasImageTagTrace(rawSource))
         ? undefined
         : {
             key: BBI_CHAR_EXTRA_KEY,
@@ -551,7 +606,12 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       recomputeCharTags();
       if (rebaseNote) console.info(`[柏宝绘] 第 ${floor} 楼 tag 位置重定位:${rebaseNote}`);
       if (plan.images.length) {
-        toastr.success(`已在第 ${floor} 楼插入 ${plan.images.length} 个生图 tag`, '柏宝绘');
+        toastr.success(
+          profile.comic
+            ? `已在第 ${floor} 楼插入 ${plan.images.length} 页漫画分镜`
+            : `已在第 ${floor} 楼插入 ${plan.images.length} 个生图 tag`,
+          '柏宝绘',
+        );
       } else if (opts.manual) {
         toastr.info('模型认为本楼没有值得插图的画面', '柏宝绘');
       } else {
@@ -616,6 +676,13 @@ export async function requestFloorTags(floor: number, opts: { replace?: boolean 
   await runForFloor(floor, { manual: true, replace: opts.replace });
 }
 
+/** 为用户选中的这段楼层文字生成一张图。 */
+export async function requestSelectedTextTag(floor: number, text: string): Promise<void> {
+  const selectedText = text.trim().slice(0, 4000);
+  if (!selectedText) return;
+  await runForFloor(floor, { manual: true, selectedText });
+}
+
 /**
  * 「AI 重写提示词」的手动入口:只重写并替换第 seq 条 tag(0-based)。
  *
@@ -628,8 +695,8 @@ export async function requestFloorTags(floor: number, opts: { replace?: boolean 
  * 分析基底剔除全部旧 tag(AI 不该把 tag 当正文),强制输出 1 张;本楼其它 tag 与图片
  * 一字不动,旧图留在该槽位历史里。本次 AI 输出的 changes 一律忽略(首次全量分析时已建档)。
  */
-export async function requestSlotTag(floor: number, seq: number): Promise<void> {
-  await runForFloor(floor, { manual: true, slot: { seq } });
+export async function requestSlotTag(floor: number, seq: number, instruction = ''): Promise<void> {
+  await runForFloor(floor, { manual: true, slot: { seq, instruction: instruction.trim().slice(0, 2000) } });
 }
 
 /** 中止某楼在途的 tag 请求(全量分析与单槽重写共用同一把「每楼一把」的锁)。 */

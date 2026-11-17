@@ -60,28 +60,6 @@ afterEach(() => {
 });
 
 describe('global char tag store', () => {
-  it('角色负面词随保存、重载、全局提升和聊天复制保留，并可清空及回滚', () => {
-    const entry = { ...makeEntry('苏灵素', { sex: '1girl' }), negative: ' fox ears, tail ' };
-    expect(charTags.upsertCharTag(entry)).toBe(true);
-    charTags.hydrateCharTags();
-    expect(charTags.findCharTag(entry.name)?.negative).toBe('fox ears, tail');
-    expect(globalTags.promoteCharTagToGlobal(entry.name)).toBe(true);
-    expect(globalTags.globalCharTagLib.entries[0].negative).toBe('fox ears, tail');
-    expect(globalTags.copyGlobalCharTagToChat(entry.name)).toBe(true);
-    const copied = charTags.findCharTag(entry.name)!;
-    expect(copied.negative).toBe('fox ears, tail');
-    expect(charTags.upsertCharTag({ ...copied, negative: '' }, entry.name, { recordChanges: true })).toBe(true);
-    charTags.hydrateCharTags();
-    expect(charTags.findCharTag(entry.name)?.negative ?? '').toBe('');
-    const cleared = charTags.findCharTag(entry.name)!;
-    const record = cleared.history.find(r => r.field === 'negative')!;
-    expect(record.from).toBe('fox ears, tail');
-    expect(record.to).toBe('');
-    expect(charTags.rollbackCharTag(entry.name, record)).toBe(true);
-    expect(charTags.findCharTag(entry.name)?.negative).toBe('fox ears, tail');
-    expect(charTags.buildEntryTag(charTags.findCharTag(entry.name)!)).toBe('1girl');
-  });
-
   it('upsert 落盘 extensionSettings 且剥离 history,并合并进派生库', () => {
     const ok = globalTags.upsertGlobalCharTag({
       ...makeEntry('玩家', { sex: '1boy', hair: 'short black hair' }),
