@@ -4,6 +4,7 @@ import {
   clearAutoGenerateFlags,
   clearAutoGenerateForFloor,
   consumeAutoGenerate,
+  consumeAutoGenerateWhenReady,
   markForAutoGenerate,
   shouldAutoGenerate,
   type AutoGeneratePhase,
@@ -49,6 +50,14 @@ describe('auto generate flags', () => {
     clearAutoGenerateFlags();
     markForAutoGenerate('chat1', 5, 0, 0, 'force');
     expect(consumeAutoGenerate('chat1', 5, 0, 0)).toBe('force');
+  });
+
+  it('keeps a rewrite force flag until the rewrite task ends', () => {
+    clearAutoGenerateFlags();
+    markForAutoGenerate('chat1', 5, 0, 0, 'force');
+    expect(consumeAutoGenerateWhenReady('chat1', 5, 0, 0, true)).toBe(null);
+    expect(consumeAutoGenerateWhenReady('chat1', 5, 0, 0, false)).toBe('force');
+    expect(consumeAutoGenerateWhenReady('chat1', 5, 0, 0, false)).toBe(null);
   });
 
   it('re-marking the same slot replaces its mode (force wins over a leftover auto)', () => {

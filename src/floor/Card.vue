@@ -7,8 +7,8 @@ import type { ComicLayout } from '@/backends/mossLayout';
 import { effectiveOrientation, type Orientation } from '@/backends/size';
 import Icon from '@/components/Icon.vue';
 import { confirmDialog } from '@/components/confirm';
-import { backendStatus, decideSeed, generateImage, tagBlockReason, type GenerateInput } from '@/generate';
-import { consumeAutoGenerate, shouldAutoGenerate } from '@/floor/autoGenerate';
+import { backendStatus, decideSeed, generateImage, tagBlockReason } from '@/generate';
+import { consumeAutoGenerateWhenReady, shouldAutoGenerate } from '@/floor/autoGenerate';
 import { isCollapsed, setCollapsed } from '@/floor/collapseState';
 import { imageDownloadFileName, saveImageFile } from '@/floor/download';
 import {
@@ -28,9 +28,6 @@ import { hydrateMessage } from '@/floor/hydrate';
 import { openLightbox } from '@/floor/lightbox';
 import { confirmImageMissing, isImageMissing } from '@/floor/missingImages';
 import { cancelTargetedRewrite, openPromptEditor } from '@/floor/promptEditor';
-import InpaintEditor from '@/floor/InpaintEditor.vue';
-import type { FocusRect } from '@/floor/inpaintSelection';
-import { requestTargetedRewrite } from '@/floor/targetedRewrite';
 import { charTagsBeforeFloor } from '@/state/charTags';
 import {
   deleteImageResult,
@@ -120,8 +117,6 @@ watch(
 );
 
 const promptOpen = ref(false);
-const inpaintOpen = ref(false);
-const inpaintSource = ref('');
 
 /**
  * 折叠态:存模块级 store 按槽位 key 认领(组件随时被水合重建,ref 会丢),
@@ -319,15 +314,10 @@ const pendingHint = computed(() => {
     : '未配置 ComfyUI,请到柏宝绘「渠道」页填写工作流';
 });
 
-async function runGenerate(inpaint?: { image: string; mask: string; width: number; height: number; strength: number; instruction: string; selection: FocusRect; targetCharacter?: string }): Promise<void> {
-  if (inpaint && !naiActive.value) {
-    toastr.warning('局部重绘需要切回 NovelAI 渠道', '柏宝绘');
-    return;
-  }
+async function runGenerate(): Promise<void> {
   if (busy.value || planning.value || !canGenerate.value) return;
   const slot = key.value;
   const currentHash = hash.value;
-  const snapshot = inpaint ? shownEntry.value?.meta?.promptSnapshot : undefined;
   // 本次任务的输入全部就地取值:请求在途时本组件很可能已被重水合销毁
   // (任一兄弟槽位出图都会触发全楼重建),销毁后再读 props 不可靠。
   const job = {
@@ -335,18 +325,16 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
     swipeId: props.swipeId,
     seq: props.seq,
     tag: props.tag,
-    prompt: snapshot?.tag ?? props.prompt,
-    nl: snapshot?.nl ?? props.nl,
-    negative: snapshot?.negative ?? props.negative,
-    characters: (snapshot?.characters ?? props.characters).map(character => ({
+    prompt: props.prompt,
+    nl: props.nl,
+    negative: props.negative,
+    characters: props.characters.map(character => ({
       ...character,
       negative: character.negative ?? charTagsBeforeFloor(props.messageId + 1).find(entry => entry.name === character.name)?.negative ?? '',
     })) as ImageCharacterPrompt[],
     size: effectiveSize.value,
     // 深拷贝:分镜在途期间本组件可能已被重水合销毁
     comic: props.kind === 'comic' && props.layout ? (JSON.parse(JSON.stringify(props.layout)) as ComicLayout) : undefined,
-    inpaint: inpaint ? { image: inpaint.image, mask: inpaint.mask, width: inpaint.width, height: inpaint.height,
-      strength: inpaint.strength } as NonNullable<GenerateInput['inpaint']> : undefined,
   };
   // 漫画没有 tag,历史里记人读形态的分镜,回溯时才看得出画的是哪一页
   // NAI 需要闸门排队 → 先显示「排队中」;ComfyUI 有服务端队列,直接进 generating
@@ -355,14 +343,6 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
   let historyId: number | null = null;
 
   try {
-    if (inpaint?.instruction) {
-      const edited = await requestTargetedRewrite({ tag: job.prompt, nl: job.nl, negative: job.negative,
-        characters: job.characters, size: job.size }, inpaint.instruction, signal, inpaint.targetCharacter);
-      job.prompt = edited.tag;
-      job.nl = edited.nl;
-      job.negative = edited.negative;
-      job.characters = edited.characters;
-    }
     const historyPrompt = job.comic ? promptText.value : job.prompt;
     // 发起时就确定种子(NAI 方案种子 > 0 时用固定值;否则随机),随结果落盘进 extra
     // (entry.seed),历史翻页可查/可复用。口径在 generate.ts,与公开接口同源。
@@ -400,31 +380,13 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
     }
     // 落盘:图片进 ST 文件系统 + extra 写指针。成功后重水合,
     // 卡片从 extra 恢复为 ready(blob/dataURL 生命周期随之结束)。
-    if (inpaint) {
-      const actualSize = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-        image.onerror = () => reject(new Error('NovelAI 返回的局部重绘图片无法读取'));
-        image.src = result.url;
-      });
-      if (actualSize.width !== inpaint.width || actualSize.height !== inpaint.height)
-        throw new Error(`NovelAI 返回尺寸 ${actualSize.width}×${actualSize.height}，与原图 ${inpaint.width}×${inpaint.height} 不一致，未保存结果`);
-    }
-    const savedResult = result;
-    if (inpaint) {
-      meta.params.inpaintArea = { ...inpaint.selection, sourceWidth: inpaint.width,
-        sourceHeight: inpaint.height, strength: inpaint.strength };
-    }
     if (!isCurrentGen(slot, token)) {
       result.revoke();
-      savedResult.revoke();
       if (historyId !== null) safeHistory(() => failImage(historyId!, '', true));
       return;
     }
-    await saveImageResult(job.messageId, job.swipeId, job.seq, job.tag, seed, savedResult, meta);
-    if (inpaint) inpaintOpen.value = false;
+    await saveImageResult(job.messageId, job.swipeId, job.seq, job.tag, seed, result, meta);
     result.revoke();
-    if (savedResult !== result) savedResult.revoke();
     if (historyId !== null) safeHistory(() => finishImage(historyId!));
     // 先清运行态再重水合:重水合会重建本组件,清完才不会带着 generating 复活
     clearGen(slot, token);
@@ -444,19 +406,6 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
 }
 
 function generate(): Promise<void> { return runGenerate(); }
-
-function openInpaint(): void {
-  if (!shownEntry.value || !naiActive.value || !canGenerate.value) return;
-  inpaintSource.value = shownEntry.value.path;
-  inpaintOpen.value = true;
-  menuOpen.value = false;
-}
-
-/** 收起编辑器只改展示态；在途任务由 genState 持有，取消必须显式走 cancelGen。 */
-function closeInpaint(): void {
-  if (busy.value) toastr.info('局部重绘继续在后台生成，完成后会出现在本图历史中', '柏宝绘');
-  inpaintOpen.value = false;
-}
 
 /**
  * 「按当前方案重新生成本楼」:tag 类型与方案对不上时唯一的出路(见 blockReason)。
@@ -587,20 +536,19 @@ function downloadCurrent(): void {
 // props patch 而非重挂,onMounted 不会再跑;tag 一变必须立刻作废旧提示词的任务。
 watch(hash, current => reconcileGen(key.value, current), { immediate: true });
 
-onMounted(() => {
-  // 「写入 tag 后自动生成图片」:本槽位带着标记水合挂载 → 消费标记并直接开始生成。
-  // **标记一律先消费再判断**:留着它会在日后同槽位重现(比如用户删掉旧图)时被新卡片
-  // 误认领,凭空开跑一次用户没点过的生成。判定本身抽成 shouldAutoGenerate 纯函数
-  // (本组件没有单测,留在这儿锁不住),口径见 floor/autoGenerate.ts。
-  // 未配置后端时不跑(卡片维持 pending,显示配置引导);标记同样已消费掉。
+function startMarkedGeneration(): void {
+  // AI 重写尚在途时不能消费标记：此时 runGenerate 会因 planning 直接返回。
+  // 重写结束或同锚点卡片只更新 props 时再检查，避免新 tag 已保存却不出图。
   if (!props.chatId) return;
-  const mode = consumeAutoGenerate(props.chatId, props.messageId, props.swipeId, props.seq);
+  const mode = consumeAutoGenerateWhenReady(props.chatId, props.messageId, props.swipeId, props.seq, planning.value);
   if (!mode) return;
   if (!shouldAutoGenerate(mode, phase.value)) return;
-  // 类型对不上的 tag 静默跳过(卡片上自有提示与整楼重来的入口)
   if (!canGenerate.value) return;
   void generate();
-});
+}
+
+onMounted(startMarkedGeneration);
+watch([planning, () => props.tag], startMarkedGeneration, { flush: 'post' });
 </script>
 
 <template>
@@ -721,8 +669,6 @@ onMounted(() => {
           >
             <Icon name="refresh" :size="15" />
           </button>
-          <button v-if="shownEntry && naiActive && kind !== 'comic'" class="bbi-fab" type="button"
-            :disabled="!canGenerate" title="涂抹局部重绘" @click="openInpaint">🖌</button>
           <button
             v-if="shownEntry"
             class="bbi-fab"
@@ -812,6 +758,4 @@ onMounted(() => {
       </div>
     </div>
   </div>
-  <InpaintEditor :open="inpaintOpen" :src="inpaintSource" :characters="props.characters.map(character => character.name)" :busy="busy" :generation-error="phase === 'error' ? error : ''"
-    @close="closeInpaint" @cancel="cancel" @apply="runGenerate" />
 </template>

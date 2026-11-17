@@ -2,8 +2,8 @@
  * 「写入 tag 后自动生成图片」握手(autoTag.autoGenerate,默认开)。
  *
  * 时序:runner 写入 tag 前为每个新槽位挂上标记 → applyMessageText 内部触发
- * MESSAGE_EDITED / MESSAGE_UPDATED → 楼层重渲染、卡片水合挂载 →
- * 卡片 onMounted 消费本槽位标记并自动开始生成。
+ * MESSAGE_EDITED / MESSAGE_UPDATED → 楼层重渲染、卡片水合更新 →
+ * 卡片在挂载或更新后消费本槽位标记并自动开始生成。
  *
  * 标记一次性:消费即删,重水合不会重复触发;楼层懒渲染(群聊等)时标记暂存,
  * 等楼层真正渲染再消费;切聊天/删楼时整体清空,避免污染其它聊天或旧槽位。
@@ -49,6 +49,17 @@ export function consumeAutoGenerate(
   if (mode === undefined) return null;
   flags.delete(k);
   return mode;
+}
+
+/** AI 重写仍在途时保留标记；待写回、重水合都结束后再消费。 */
+export function consumeAutoGenerateWhenReady(
+  chatId: string,
+  messageId: number,
+  swipeId: number,
+  seq: number,
+  planning: boolean,
+): AutoGenerateMode | null {
+  return planning ? null : consumeAutoGenerate(chatId, messageId, swipeId, seq);
 }
 
 /**

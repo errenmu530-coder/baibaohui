@@ -266,8 +266,6 @@ export interface NaiGenerateValues {
   seed?: number;
   /** 画幅方向;缺省竖屏(与改动前的固定默认一致)。 */
   size?: Orientation;
-  /** 局部重绘：原图/白色遮罩均为不带 data URL 前缀的 base64 PNG。 */
-  inpaint?: { image: string; mask: string; width: number; height: number; strength: number };
 }
 
 /**
@@ -630,36 +628,11 @@ export interface NaiImageOutput {
   usage: Pick<GenerationMeta, 'positive' | 'negative' | 'width' | 'height' | 'artist' | 'vibes' | 'params'>;
 }
 
-/** V5 Curated 官方目前借用 V4.5 Curated 的局部重绘模型。 */
-export function naiInpaintModel(model: string): string {
-  return model === 'nai-diffusion-5-curated'
-    ? 'nai-diffusion-4-5-curated-inpainting'
-    : `${model}-inpainting`;
-}
-
-export function addNaiInpaintParameters(
-  params: JsonObject,
-  source: NonNullable<NaiGenerateValues['inpaint']>,
-): void {
-  if (!source.image || !source.mask || source.width <= 0 || source.height <= 0) throw new NaiError('局部重绘缺少原图或遮罩');
-  params.width = source.width;
-  params.height = source.height;
-  params.image = source.image;
-  params.mask = source.mask;
-  // 普通局部重绘直接保存 NAI 返回的整图，不再额外请求叠回原图。
-  params.add_original_image = false;
-  params.strength = Math.min(1, Math.max(0.01, source.strength));
-  params.noise = 0;
-  params.img2img = { strength: params.strength, noise: 0, color_correct: false };
-}
-
 export function buildNaiRequestBody(nai: NaiRunConfig, values: NaiGenerateValues, params: JsonObject): JsonObject {
-  const promptNai: NaiRunConfig = values.inpaint && nai.model === 'nai-diffusion-5-curated'
-    ? { ...nai, model: 'nai-diffusion-4-5-curated' } : nai;
   return {
-    input: fullPositivePrompt(promptNai, values.prompt, values.nl),
-    model: values.inpaint ? naiInpaintModel(nai.model) : nai.model,
-    action: values.inpaint ? 'infill' : 'generate',
+    input: fullPositivePrompt(nai, values.prompt, values.nl),
+    model: nai.model,
+    action: 'generate',
     parameters: params,
     use_new_shared_trial: true,
   };
@@ -682,11 +655,9 @@ export async function generateNaiImage(
   if (!values.prompt.trim()) throw new NaiError('正向提示词不能为空');
 
   // 画师串在发请求时解析一次，快照下来随图落盘：事后配方被删/改名也不丢。
-  const requestNai: NaiRunConfig = values.inpaint && nai.model === 'nai-diffusion-5-curated'
-    ? { ...nai, model: 'nai-diffusion-4-5-curated' } : nai;
+  const requestNai = nai;
   const artist = naiArtistUsage(requestNai);
   const params = buildNaiParameters(requestNai, values);
-  if (values.inpaint) addNaiInpaintParameters(params, values.inpaint);
   const activeVibes = naiSupportsVibes(nai.model) ? nai.vibes : [];
   const loaded = new Map<string, NaiVibeData>();
   for (const vibe of activeVibes) {

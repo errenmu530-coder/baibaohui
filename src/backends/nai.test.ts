@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyVibes,
-  addNaiInpaintParameters,
   buildNaiParameters,
   buildNaiRequestBody,
   BUILTIN_NAI_ARTISTS,
@@ -13,7 +12,6 @@ import {
   naiDefaultQualityTags,
   naiDefaultUndesired,
   naiEndpoint,
-  naiInpaintModel,
   naiFixedSettings,
   naiRandomSeed,
   naiSupportsCharacterPrompts,
@@ -95,22 +93,6 @@ describe('naiEndpoint', () => {
 
   it('空地址报错', () => {
     expect(() => naiEndpoint('  ', 'generate-image')).toThrow(NaiError);
-  });
-});
-
-describe('NovelAI 局部重绘请求', () => {
-  it('选择对应局部重绘模型，V5 Curated 使用官方 V4.5 Curated 回退', () => {
-    expect(naiInpaintModel('nai-diffusion-5-full')).toBe('nai-diffusion-5-full-inpainting');
-    expect(naiInpaintModel('nai-diffusion-5-curated')).toBe('nai-diffusion-4-5-curated-inpainting');
-  });
-  it('只在局部重绘请求里加入原图和白色遮罩及强度', () => {
-    const params = buildNaiParameters(nai(), { prompt: 'bamboo', seed: 1 });
-    addNaiInpaintParameters(params, { image: 'aW1hZ2U=', mask: 'bWFzaw==', width: 832, height: 1216, strength: 0.55 });
-    expect(params).toMatchObject({ image: 'aW1hZ2U=', mask: 'bWFzaw==', width: 832, height: 1216,
-      strength: 0.55, add_original_image: false, img2img: { strength: 0.55, noise: 0 } });
-    expect(buildNaiRequestBody(nai(), { prompt: 'bamboo', inpaint: { image: 'aW1hZ2U=', mask: 'bWFzaw==', width: 832, height: 1216, strength: 0.55 } }, params))
-      .toMatchObject({ action: 'infill', model: 'nai-diffusion-4-5-full-inpainting', parameters: params });
-    expect(buildNaiRequestBody(nai(), { prompt: 'bamboo' }, params).action).toBe('generate');
   });
 });
 

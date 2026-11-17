@@ -26,7 +26,7 @@ import type { ImageCharacterPrompt } from '@/autoTag/protocol';
 import { comfySimpleParams, composeNegative, composePositive, validateSimpleConfig, type SimpleGenValues } from '@/backends/comfyTemplates';
 import { generateComfyImage, randomSeed, type ComfyImageResult } from '@/backends/comfyui';
 import { buildMossPrompt, type ComicLayout } from '@/backends/mossLayout';
-import { generateNaiImage, naiInpaintModel, naiRandomSeed, naiSupportsCharacterPrompts } from '@/backends/nai';
+import { generateNaiImage, naiRandomSeed, naiSupportsCharacterPrompts } from '@/backends/nai';
 import { effectiveOrientation, parseSize, pickSize, type Orientation } from '@/backends/size';
 import { acquireNaiSlot } from '@/floor/genQueue';
 import type { GenerationMeta } from '@/generationMeta';
@@ -56,8 +56,6 @@ export interface GenerateInput {
    * MOSS layout JSON——bbox 是像素坐标,画幅定了才算得出来,所以不能提前存进 tag。
    */
   comic?: ComicLayout;
-  /** NovelAI 局部重绘输入。 */
-  inpaint?: { image: string; mask: string; width: number; height: number; strength: number };
 }
 
 /** 生成过程中的进度上报(卡片用它显示排队位置与退避进度)。 */
@@ -250,12 +248,12 @@ export async function generateImage(
           characters: characters.map(character => {
           const negative = character.negative ?? findCharTag(character.name)?.negative;
           return negative ? { ...character, negative } : character;
-        }), seed: input.seed, size, inpaint: input.inpaint },
+        }), seed: input.seed, size },
         signal,
         { onRetry: info => progress.onRetry?.({ attempt: info.attempt, max: info.max }) },
       );
       result = output.result;
-      meta = { backend: 'nai', model: input.inpaint ? naiInpaintModel(status.model) : status.model, ...output.usage };
+      meta = { backend: 'nai', model: status.model, ...output.usage };
     } else {
       let conn = effectiveComfyConn();
       // 尺寸解析口径与 generateComfyImage 一致（未解析出时 0 = 用工作流自带尺寸）。
@@ -306,15 +304,6 @@ export async function generateImage(
       };
     }
 
-    // 每张结果记录当次实际提示词；局部重绘不改楼层原 tag，也能连续编辑前一张结果。
-    if (input.inpaint) meta.promptSnapshot = {
-      tag: input.prompt,
-      nl: input.nl ?? '',
-      negative: input.negative ?? '',
-      characters: characters.map(character => ({ name: character.name, tag: character.tag,
-        nl: character.nl, negative: character.negative })),
-      size,
-    };
     // 退避文案到此为止:图已拿到,落盘还要一会儿,不该继续显示「稍后重试」
     progress.onRetry?.(null);
     return { result, seed: input.seed, size, backend: status.backend, charactersApplied, meta };
