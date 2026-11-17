@@ -1,6 +1,6 @@
 # 柏宝绘定制版 0.3.6-custom.1
 
-基于上游 `ST-BaiBai-Image` 0.3.6（2026-11-17 获取）制作。
+这是基于上游 `ST-BaiBai-Image` 0.3.6（2026-11-17 获取）制作的独立修改版，**不是原作者发布的版本**。原作者：柏柏；[原版项目](https://github.com/baibai-git/ST-BaiBai-Image)。本仓库此前发布过 0.3.2-charneg.1 角色负面词版。
 
 ## 新增功能
 
