@@ -142,11 +142,11 @@ function apply(): void {
   <ModalMask :open="open" top-layer @close="!busy && emit('close')">
     <div class="bbi-modal bbi-inpaint" role="dialog" aria-modal="true" aria-label="NovelAI 聚焦局部重绘">
       <header class="bbi-modal-head"><span class="bbi-modal-title">NovelAI 聚焦局部重绘</span><button type="button" class="bbi-icon-mini" :disabled="busy" @click="emit('close')">×</button></header>
-      <p>涂抹要修改的区域；插件会放大该区域交给 NovelAI 重绘，再贴回原图。也可以先画聚焦框，再涂抹；只有框时会重绘整个框。</p>
-      <div class="bbi-inpaint-modes"><button type="button" :disabled="busy" :aria-pressed="mode === 'brush'" @click="mode = 'brush'">涂抹</button><button type="button" :disabled="busy" :aria-pressed="mode === 'focus'" @click="mode = 'focus'">画聚焦框</button></div>
+      <p class="bbi-inpaint-help">先选工具，再在图片上拖动。画聚焦框后，可切回涂抹工具只刷框内需要修改的位置。</p>
+      <div class="bbi-inpaint-modes"><button type="button" :disabled="busy" :aria-pressed="mode === 'brush'" @click="mode = 'brush'">涂抹</button><button type="button" :disabled="busy" :aria-pressed="mode === 'focus'" @click="mode = 'focus'">画聚焦框</button><span class="bbi-inpaint-current">当前：{{ mode === 'focus' ? '画聚焦框' : '涂抹' }}</span></div>
       <div class="bbi-inpaint-canvas">
         <img ref="imageEl" :src="src" crossorigin="anonymous" alt="待重绘图片" @load="ready" />
-        <canvas ref="maskEl" @pointerdown="start" @pointermove="stroke" @pointerup="stop" @pointercancel="stop" />
+        <canvas ref="maskEl" @pointerdown.prevent="start" @pointermove.prevent="stroke" @pointerup="stop" @pointercancel="stop" />
         <div v-if="focusBox && focusBox.width >= 2 && focusBox.height >= 2" class="bbi-inpaint-focus" :style="{ left: `${focusBox.x / (maskEl?.width || 1) * 100}%`, top: `${focusBox.y / (maskEl?.height || 1) * 100}%`, width: `${focusBox.width / (maskEl?.width || 1) * 100}%`, height: `${focusBox.height / (maskEl?.height || 1) * 100}%` }" />
       </div>
       <label>画笔大小 <input v-model.number="brush" type="range" min="5" max="100" :disabled="busy" /></label>
@@ -160,15 +160,23 @@ function apply(): void {
 </template>
 
 <style scoped>
-.bbi-inpaint { width: min(92vw, 850px); max-height: 90vh; overflow: auto; padding: 18px; display: grid; gap: 12px; }
+.bbi-inpaint { width: min(92vw, 850px); max-height: 88vh; max-height: 88dvh; overflow: auto; padding: 18px; display: grid; gap: 10px; }
+.bbi-inpaint-help { margin: 0; }
 .bbi-inpaint-canvas { position: relative; width: fit-content; max-width: 100%; margin: auto; line-height: 0; }
-.bbi-inpaint-canvas img { max-width: 100%; max-height: 55vh; }
+.bbi-inpaint-canvas img { display: block; max-width: 100%; max-height: 38vh; max-height: 38dvh; width: auto; height: auto; }
 .bbi-inpaint-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; touch-action: none; cursor: crosshair; }
 .bbi-inpaint-focus { position: absolute; border: 2px dashed #00b7ff; box-shadow: 0 0 0 1px #000; pointer-events: none; }
-.bbi-inpaint-modes { display: flex; gap: 8px; }
-.bbi-inpaint-modes button[aria-pressed="true"] { background: #0873bd; color: white; }
+.bbi-inpaint-modes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.bbi-inpaint-modes button[aria-pressed="true"] { background: #0873bd; color: white; border-color: #0873bd; }
+.bbi-inpaint-current { font-size: 12px; color: var(--bbi-ink-soft); }
 .bbi-inpaint label { display: flex; gap: 10px; align-items: center; }
 .bbi-inpaint textarea { flex: 1; min-width: 0; }
 .bbi-inpaint footer { display: flex; justify-content: flex-end; gap: 10px; }
 .bbi-inpaint-error { color: #f88; }
+@media (max-width: 640px) {
+  .bbi-inpaint { width: min(94vw, 520px); padding: 12px; gap: 8px; }
+  .bbi-inpaint-canvas img { max-height: 35vh; max-height: 35dvh; }
+  .bbi-inpaint label { flex-wrap: wrap; }
+  .bbi-inpaint footer { flex-wrap: wrap; }
+}
 </style>
