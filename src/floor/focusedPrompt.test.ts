@@ -11,4 +11,14 @@ describe('局部重绘请求词校验', () => {
     expect(() => parseFocusedPrompt('{"tag":"1boy 1girl, lakeside","nl":"two people by a lake"}')).toThrow('整幅构图');
     expect(() => parseFocusedPrompt('{"tag":"full body, soft boots","nl":""}')).toThrow('整幅构图');
   });
+  it('穿鞋请求拒绝仍描述赤脚的局部词', () => {
+    expect(() => parseFocusedPrompt(
+      '{"tag":"soft cloth boots, lower legs","nl":"Boots on her existing bare feet."}',
+      '给苏灿灿穿上鞋',
+    )).toThrow('不能继续描述赤脚');
+    expect(parseFocusedPrompt(
+      '{"tag":"soft cloth boots, lower legs","nl":"The boots fully cover her feet."}',
+      '给苏灿灿穿上鞋',
+    ).tag).toContain('boots');
+  });
 });

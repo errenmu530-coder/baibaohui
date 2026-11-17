@@ -2,6 +2,7 @@
 import { nextTick, ref, watch } from 'vue';
 import ModalMask from '@/components/ModalMask.vue';
 import { focusedRect, prepareFocusedInput, type FocusRect, type FocusedComposite } from '@/floor/focusedInpaint';
+import { visibleInpaintSteps, type InpaintPoint, type InpaintStep } from '@/floor/inpaintSteps';
 
 const props = defineProps<{ open: boolean; src: string; characters: string[]; busy?: boolean; generationError?: string }>();
 const emit = defineEmits<{
@@ -12,14 +13,17 @@ const emit = defineEmits<{
 const imageEl = ref<HTMLImageElement | null>(null);
 const maskEl = ref<HTMLCanvasElement | null>(null);
 const instruction = ref('');
-const strength = ref(0.75);
+const strength = ref(0.95);
 const brush = ref(35);
-const mode = ref<'brush' | 'focus'>('brush');
+const mode = ref<'brush' | 'focus'>('focus');
 const painting = ref(false);
 const hasMask = ref(false);
 const focusBox = ref<FocusRect | null>(null);
 const startPoint = ref<{ x: number; y: number } | null>(null);
 const lastPoint = ref<{ x: number; y: number } | null>(null);
+const steps = ref<InpaintStep[]>([]);
+let currentStroke: InpaintPoint[] = [];
+let currentWidth = 0;
 const targetCharacter = ref('');
 const error = ref('');
 
@@ -31,6 +35,8 @@ function ready(): void {
   mask.height = img.naturalHeight;
   hasMask.value = false;
   focusBox.value = null;
+  mode.value = 'focus';
+  steps.value = [];
   error.value = '';
 }
 watch(() => props.open, async value => { if (value) { await nextTick(); ready(); } });
@@ -60,29 +66,91 @@ function stroke(event: PointerEvent): void {
   if (!ctx) return;
   ctx.strokeStyle = '#00b7ff';
   ctx.fillStyle = '#00b7ff';
-  ctx.lineWidth = brush.value * canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
+  ctx.lineWidth = currentWidth;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
   if (lastPoint.value) { ctx.moveTo(lastPoint.value.x, lastPoint.value.y); ctx.lineTo(pos.x, pos.y); ctx.stroke(); }
   else { ctx.arc(pos.x, pos.y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fill(); }
   lastPoint.value = pos;
+  currentStroke.push(pos);
   hasMask.value = true;
+}
+function replaySteps(): void {
+  const canvas = maskEl.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  focusBox.value = null;
+  hasMask.value = false;
+  for (const step of visibleInpaintSteps(steps.value)) {
+    if (step.kind === 'focus') {
+      focusBox.value = { ...step.rect };
+      continue;
+    }
+    ctx.strokeStyle = '#00b7ff';
+    ctx.fillStyle = '#00b7ff';
+    ctx.lineWidth = step.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    step.points.forEach((point, index) => {
+      ctx.beginPath();
+      if (index) {
+        ctx.moveTo(step.points[index - 1].x, step.points[index - 1].y);
+        ctx.lineTo(point.x, point.y);
+        ctx.stroke();
+      } else {
+        ctx.arc(point.x, point.y, step.width / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+    hasMask.value = true;
+  }
 }
 function start(event: PointerEvent): void {
   if (props.busy) return;
+  if (mode.value === 'focus') {
+    const canvas = maskEl.value;
+    canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    hasMask.value = false;
+    focusBox.value = null;
+  } else {
+    // 框选与涂抹是两种独立选区，切换后按用户当前拖动重新选择。
+    focusBox.value = null;
+  }
   painting.value = true;
   startPoint.value = point(event);
   lastPoint.value = null;
+  currentStroke = [];
+  currentWidth = brush.value * (maskEl.value?.width || 1) / Math.max(1, maskEl.value?.getBoundingClientRect().width || 1);
   maskEl.value?.setPointerCapture(event.pointerId);
   stroke(event);
 }
-function stop(): void { painting.value = false; lastPoint.value = null; }
+function stop(): void {
+  if (!painting.value) return;
+  painting.value = false;
+  lastPoint.value = null;
+  if (mode.value === 'focus' && focusBox.value && focusBox.value.width >= 2 && focusBox.value.height >= 2)
+    steps.value.push({ kind: 'focus', rect: { ...focusBox.value } });
+  else if (mode.value === 'brush' && currentStroke.length)
+    steps.value.push({ kind: 'brush', points: [...currentStroke], width: currentWidth });
+  else replaySteps();
+  currentStroke = [];
+}
+function undo(): void {
+  if (props.busy || painting.value || !steps.value.length) return;
+  steps.value.pop();
+  replaySteps();
+  error.value = '';
+}
 function clear(): void {
   const canvas = maskEl.value;
   canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
   hasMask.value = false;
   focusBox.value = null;
+  steps.value = [];
+  error.value = '';
 }
 function apply(): void {
   const img = imageEl.value;
@@ -106,7 +174,10 @@ function apply(): void {
     alpha.height = mask.height;
     const ctx = alpha.getContext('2d')!;
     ctx.drawImage(mask, 0, 0);
-    if (focusBox.value && !hasMask.value) {
+    if (focusBox.value) {
+      if (focusBox.value.width < 8 || focusBox.value.height < 8) {
+        error.value = '聚焦框太小，请按住图片拖出覆盖整个目标的矩形。'; return;
+      }
       ctx.fillStyle = '#fff';
       ctx.fillRect(focusBox.value.x, focusBox.value.y, focusBox.value.width, focusBox.value.height);
     }
@@ -120,13 +191,8 @@ function apply(): void {
     }
     if (x1 <= x0 || y1 <= y0) { error.value = '请涂抹要重绘的区域，或画出聚焦框。'; return; }
     ctx.putImageData(pixels, 0, 0);
-    const selected = focusBox.value && focusBox.value.width >= 2 && focusBox.value.height >= 2
-      ? focusBox.value : { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+    const selected = focusBox.value ?? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
     const focus = focusedRect(selected, mask.width, mask.height, !!focusBox.value);
-    if (focusBox.value && (x0 < focusBox.value.x || y0 < focusBox.value.y ||
-      x1 > focusBox.value.x + focusBox.value.width || y1 > focusBox.value.y + focusBox.value.height)) {
-      error.value = '涂抹超出了聚焦框，请清空后重新选择或扩大聚焦框。'; return;
-    }
     const prepared = prepareFocusedInput(original, alpha, focus);
     emit('apply', { ...prepared, strength: strength.value, instruction: instruction.value.trim(),
       targetCharacter: targetCharacter.value && targetCharacter.value !== '*' ? targetCharacter.value : undefined,
@@ -139,11 +205,13 @@ function apply(): void {
 </script>
 
 <template>
-  <ModalMask :open="open" top-layer @close="!busy && emit('close')">
+  <ModalMask :open="open" top-layer @close="emit('close')">
     <div class="bbi-modal bbi-inpaint" role="dialog" aria-modal="true" aria-label="NovelAI 聚焦局部重绘">
-      <header class="bbi-modal-head"><span class="bbi-modal-title">NovelAI 聚焦局部重绘</span><button type="button" class="bbi-icon-mini" :disabled="busy" @click="emit('close')">×</button></header>
-      <p class="bbi-inpaint-help">先选工具，再在图片上拖动。画聚焦框后，可切回涂抹工具只刷框内需要修改的位置。</p>
+      <header class="bbi-modal-head"><span class="bbi-modal-title">NovelAI 聚焦局部重绘</span><button type="button" class="bbi-icon-mini" :title="busy ? '关闭窗口，后台继续生成' : '关闭'" @click="emit('close')">×</button></header>
+      <p class="bbi-inpaint-help">给局部添加或替换物体时，画框覆盖目标和它需要占据的空间；整个框都会重绘。涂抹模式只修改刷到的像素。</p>
       <div class="bbi-inpaint-modes"><button type="button" :disabled="busy" :aria-pressed="mode === 'brush'" @click="mode = 'brush'">涂抹</button><button type="button" :disabled="busy" :aria-pressed="mode === 'focus'" @click="mode = 'focus'">画聚焦框</button><span class="bbi-inpaint-current">当前：{{ mode === 'focus' ? '画聚焦框' : '涂抹' }}</span></div>
+      <p v-if="focusBox && focusBox.width >= 8 && focusBox.height >= 8" class="bbi-inpaint-selection">将重绘整个蓝色框内的区域</p>
+      <p v-else-if="hasMask" class="bbi-inpaint-selection">只重绘蓝色笔迹覆盖的区域；圈出轮廓不会自动填充内部</p>
       <div class="bbi-inpaint-canvas">
         <img ref="imageEl" :src="src" crossorigin="anonymous" alt="待重绘图片" @load="ready" />
         <canvas ref="maskEl" @pointerdown.prevent="start" @pointermove.prevent="stroke" @pointerup="stop" @pointercancel="stop" />
@@ -154,7 +222,15 @@ function apply(): void {
       <label v-if="characters.length > 1">修改哪个角色的提示词 <select v-model="targetCharacter" :disabled="busy"><option value="">请选择</option><option v-for="name in characters" :key="name" :value="name">{{ name }}</option><option value="*">全部角色／画面</option></select></label>
       <label>局部修改要求 <textarea v-model="instruction" rows="2" :disabled="busy" placeholder="例如：给苏灿灿的双脚穿上软布靴，只修改脚和鞋" /></label>
       <p v-if="error || generationError" class="bbi-inpaint-error">{{ error || generationError }}</p>
-      <footer><button v-if="busy" type="button" @click="emit('cancel')">取消生成</button><button v-else type="button" @click="clear">清空涂抹与聚焦框</button><button type="button" :disabled="busy || (!hasMask && !focusBox)" @click="apply">{{ busy ? '正在重绘…' : '生成局部重绘图' }}</button></footer>
+      <footer>
+        <button v-if="busy" type="button" @click="emit('close')">关闭窗口，后台继续</button>
+        <button v-if="busy" type="button" @click="emit('cancel')">取消生成</button>
+        <template v-else>
+          <button type="button" :disabled="!steps.length" @click="undo">撤回一步</button>
+          <button type="button" :disabled="!steps.length" @click="clear">全部清空</button>
+        </template>
+        <button type="button" :disabled="busy || (!hasMask && !focusBox)" @click="apply">{{ busy ? '正在重绘…' : '生成局部重绘图' }}</button>
+      </footer>
     </div>
   </ModalMask>
 </template>

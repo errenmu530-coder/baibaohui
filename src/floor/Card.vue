@@ -450,6 +450,12 @@ function openInpaint(): void {
   menuOpen.value = false;
 }
 
+/** 收起编辑器只改展示态；在途任务由 genState 持有，取消必须显式走 cancelGen。 */
+function closeInpaint(): void {
+  if (busy.value) toastr.info('局部重绘继续在后台生成，完成后会出现在本图历史中', '柏宝绘');
+  inpaintOpen.value = false;
+}
+
 /**
  * 「按当前方案重新生成本楼」:tag 类型与方案对不上时唯一的出路(见 blockReason)。
  * 与楼层按钮同一条路:剔除旧 tag → 按当前方案分析写入。请求归 runner,卡片随后会被重水合销毁。
@@ -805,5 +811,5 @@ onMounted(() => {
     </div>
   </div>
   <InpaintEditor :open="inpaintOpen" :src="inpaintSource" :characters="props.characters.map(character => character.name)" :busy="busy" :generation-error="phase === 'error' ? error : ''"
-    @close="inpaintOpen = false" @cancel="cancel" @apply="runGenerate" />
+    @close="closeInpaint" @cancel="cancel" @apply="runGenerate" />
 </template>
