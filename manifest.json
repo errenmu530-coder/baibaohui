@@ -1,10 +1,10 @@
 {
-  "display_name": "柏宝绘",
+  "display_name": "柏宝绘（定制修改版）",
   "loading_order": 100,
   "requires": [],
   "optional": [],
   "js": "dist/index.js?ver=0.3.6-custom.2",
-  "author": "柏柏",
+  "author": "原版：柏柏；定制仓库：errenmu530-coder",
   "version": "0.3.6-custom.2",
   "homePage": "https://github.com/errenmu530-coder/baibaohui",
   "auto_update": false,
