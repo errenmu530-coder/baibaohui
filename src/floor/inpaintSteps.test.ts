@@ -18,9 +18,9 @@ describe('局部重绘逐步撤回', () => {
     steps.pop();
     expect(visibleInpaintSteps(steps)).toEqual([first, second]);
   });
-  it('框后开始涂抹，撤回该笔后恢复框选', () => {
+  it('框后涂抹时保留聚焦框，撤回该笔后仍显示框选', () => {
     const steps = [box, first];
-    expect(visibleInpaintSteps(steps)).toEqual([first]);
+    expect(visibleInpaintSteps(steps)).toEqual([box, first]);
     steps.pop();
     expect(visibleInpaintSteps(steps)).toEqual([box]);
   });

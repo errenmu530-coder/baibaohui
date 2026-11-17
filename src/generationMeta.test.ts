@@ -91,4 +91,14 @@ describe('formatGenerationMeta', () => {
     const text = formatGenerationMeta(meta({ model: 'nai-diffusion-3', negative: '' }));
     expect(text).toBe('模型: nai-diffusion-3\n尺寸: 832×1216');
   });
+
+  it('records ordinary inpaint as a full-size request with a selection', () => {
+    const text = formatGenerationMeta(meta({ params: {
+      inpaintArea: { x: 250, y: 1000, width: 230, height: 180,
+        sourceWidth: 832, sourceHeight: 1216, strength: 0.95 },
+    } }));
+    expect(text).toContain('尺寸: 832×1216');
+    expect(text).toContain('局部重绘选区: (250, 1000) 230×180 / 原图 832×1216 · 强度 0.95');
+    expect(text).not.toContain('聚焦请求尺寸');
+  });
 });

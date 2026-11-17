@@ -646,6 +646,8 @@ export function addNaiInpaintParameters(
   params.height = source.height;
   params.image = source.image;
   params.mask = source.mask;
+  // 聚焦结果由客户端按原图遮罩合成；服务端先叠回一次会让边界被混合两次。
+  params.add_original_image = false;
   params.strength = Math.min(1, Math.max(0.01, source.strength));
   params.noise = 0;
   params.img2img = { strength: params.strength, noise: 0, color_correct: false };

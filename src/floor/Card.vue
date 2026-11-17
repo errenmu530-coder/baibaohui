@@ -29,7 +29,7 @@ import { openLightbox } from '@/floor/lightbox';
 import { confirmImageMissing, isImageMissing } from '@/floor/missingImages';
 import { cancelTargetedRewrite, openPromptEditor } from '@/floor/promptEditor';
 import InpaintEditor from '@/floor/InpaintEditor.vue';
-import { compositeFocusedResult, type FocusedComposite } from '@/floor/focusedInpaint';
+import type { FocusRect } from '@/floor/inpaintSelection';
 import { requestFocusedPrompt } from '@/floor/focusedPrompt';
 import { requestTargetedRewrite } from '@/floor/targetedRewrite';
 import { charTagsBeforeFloor } from '@/state/charTags';
@@ -320,7 +320,7 @@ const pendingHint = computed(() => {
     : '未配置 ComfyUI,请到柏宝绘「渠道」页填写工作流';
 });
 
-async function runGenerate(inpaint?: { image: string; mask: string; width: number; height: number; strength: number; instruction: string; focus: FocusedComposite; targetCharacter?: string }): Promise<void> {
+async function runGenerate(inpaint?: { image: string; mask: string; width: number; height: number; strength: number; instruction: string; selection: FocusRect; targetCharacter?: string }): Promise<void> {
   if (inpaint && !naiActive.value) {
     toastr.warning('局部重绘需要切回 NovelAI 渠道', '柏宝绘');
     return;
@@ -408,10 +408,20 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
     }
     // 落盘:图片进 ST 文件系统 + extra 写指针。成功后重水合,
     // 卡片从 extra 恢复为 ready(blob/dataURL 生命周期随之结束)。
-    const savedResult = inpaint ? await compositeFocusedResult(result, inpaint.focus) : result;
     if (inpaint) {
-      meta.params.focus = { ...inpaint.focus.rect, sourceWidth: inpaint.focus.sourceWidth,
-        sourceHeight: inpaint.focus.sourceHeight, strength: inpaint.strength };
+      const actualSize = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+        image.onerror = () => reject(new Error('NovelAI 返回的局部重绘图片无法读取'));
+        image.src = result.url;
+      });
+      if (actualSize.width !== inpaint.width || actualSize.height !== inpaint.height)
+        throw new Error(`NovelAI 返回尺寸 ${actualSize.width}×${actualSize.height}，与原图 ${inpaint.width}×${inpaint.height} 不一致，未保存结果`);
+    }
+    const savedResult = result;
+    if (inpaint) {
+      meta.params.inpaintArea = { ...inpaint.selection, sourceWidth: inpaint.width,
+        sourceHeight: inpaint.height, strength: inpaint.strength };
     }
     if (!isCurrentGen(slot, token)) {
       result.revoke();

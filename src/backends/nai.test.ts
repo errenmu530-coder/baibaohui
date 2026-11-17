@@ -107,7 +107,7 @@ describe('NovelAI 局部重绘请求', () => {
     const params = buildNaiParameters(nai(), { prompt: 'bamboo', seed: 1 });
     addNaiInpaintParameters(params, { image: 'aW1hZ2U=', mask: 'bWFzaw==', width: 832, height: 1216, strength: 0.55 });
     expect(params).toMatchObject({ image: 'aW1hZ2U=', mask: 'bWFzaw==', width: 832, height: 1216,
-      strength: 0.55, add_original_image: true, img2img: { strength: 0.55, noise: 0 } });
+      strength: 0.55, add_original_image: false, img2img: { strength: 0.55, noise: 0 } });
     expect(buildNaiRequestBody(nai(), { prompt: 'bamboo', inpaint: { image: 'aW1hZ2U=', mask: 'bWFzaw==', width: 832, height: 1216, strength: 0.55 } }, params))
       .toMatchObject({ action: 'infill', model: 'nai-diffusion-4-5-full-inpainting', parameters: params });
     expect(buildNaiRequestBody(nai(), { prompt: 'bamboo' }, params).action).toBe('generate');
