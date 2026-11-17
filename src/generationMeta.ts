@@ -76,6 +76,8 @@ export interface GenerationParams {
   shift?: number;
   /** 本次聚焦局部重绘实际使用的裁切区域和强度。 */
   focus?: { x: number; y: number; width: number; height: number; sourceWidth: number; sourceHeight: number; strength: number };
+  /** 聚焦重绘真正发给 NAI 的局部内容提示词，不含画师和质量词。 */
+  focusPrompt?: string;
 }
 
 /** 随图落盘的完整出图元信息。 */
@@ -145,6 +147,7 @@ export function formatGenerationMeta(meta: GenerationMeta): string {
     const f = meta.params.focus;
     lines.push(`聚焦区域: (${f.x}, ${f.y}) ${f.width}×${f.height} / 原图 ${f.sourceWidth}×${f.sourceHeight} · 强度 ${round(f.strength)}`);
   }
+  if (meta.params.focusPrompt) lines.push(`局部请求词: ${meta.params.focusPrompt}`);
   if (meta.negative) {
     lines.push(`负面: ${meta.negative}`);
   }

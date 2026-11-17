@@ -7,7 +7,7 @@ import type { ComicLayout } from '@/backends/mossLayout';
 import { effectiveOrientation, type Orientation } from '@/backends/size';
 import Icon from '@/components/Icon.vue';
 import { confirmDialog } from '@/components/confirm';
-import { backendStatus, decideSeed, generateImage, tagBlockReason } from '@/generate';
+import { backendStatus, decideSeed, generateImage, tagBlockReason, type GenerateInput } from '@/generate';
 import { consumeAutoGenerate, shouldAutoGenerate } from '@/floor/autoGenerate';
 import { isCollapsed, setCollapsed } from '@/floor/collapseState';
 import { imageDownloadFileName, saveImageFile } from '@/floor/download';
@@ -30,6 +30,7 @@ import { confirmImageMissing, isImageMissing } from '@/floor/missingImages';
 import { cancelTargetedRewrite, openPromptEditor } from '@/floor/promptEditor';
 import InpaintEditor from '@/floor/InpaintEditor.vue';
 import { compositeFocusedResult, type FocusedComposite } from '@/floor/focusedInpaint';
+import { requestFocusedPrompt } from '@/floor/focusedPrompt';
 import { requestTargetedRewrite } from '@/floor/targetedRewrite';
 import { charTagsBeforeFloor } from '@/state/charTags';
 import {
@@ -345,7 +346,8 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
     size: effectiveSize.value,
     // 深拷贝:分镜在途期间本组件可能已被重水合销毁
     comic: props.kind === 'comic' && props.layout ? (JSON.parse(JSON.stringify(props.layout)) as ComicLayout) : undefined,
-    inpaint: inpaint ? { image: inpaint.image, mask: inpaint.mask, width: inpaint.width, height: inpaint.height, strength: inpaint.strength } : undefined,
+    inpaint: inpaint ? { image: inpaint.image, mask: inpaint.mask, width: inpaint.width, height: inpaint.height,
+      strength: inpaint.strength } as NonNullable<GenerateInput['inpaint']> : undefined,
   };
   // 漫画没有 tag,历史里记人读形态的分镜,回溯时才看得出画的是哪一页
   // NAI 需要闸门排队 → 先显示「排队中」;ComfyUI 有服务端队列,直接进 generating
@@ -361,6 +363,13 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
       job.nl = edited.nl;
       job.negative = edited.negative;
       job.characters = edited.characters;
+    }
+    if (inpaint) {
+      const localPrompt = await requestFocusedPrompt(
+        { tag: job.prompt, nl: job.nl, negative: job.negative, characters: job.characters, size: job.size },
+        inpaint.instruction, inpaint.targetCharacter, signal,
+      );
+      job.inpaint = { ...job.inpaint!, localPrompt };
     }
     const historyPrompt = job.comic ? promptText.value : job.prompt;
     // 发起时就确定种子(NAI 方案种子 > 0 时用固定值;否则随机),随结果落盘进 extra

@@ -88,6 +88,10 @@ function apply(): void {
   const img = imageEl.value;
   const mask = maskEl.value;
   if (!img || !mask || (!hasMask.value && !focusBox.value) || props.busy) return;
+  if (!instruction.value.trim()) {
+    error.value = '请描述遮罩内要改成什么，例如「给她穿上软布靴」。';
+    return;
+  }
   if (instruction.value.trim() && props.characters.length > 1 && !targetCharacter.value) {
     error.value = '请先选择本次要修改提示词的角色，或选择「全部角色」。';
     return;
@@ -148,7 +152,7 @@ function apply(): void {
       <label>画笔大小 <input v-model.number="brush" type="range" min="5" max="100" :disabled="busy" /></label>
       <label>重绘强度 {{ strength }} <input v-model.number="strength" type="range" min="0.1" max="1" step="0.05" :disabled="busy" /></label>
       <label v-if="characters.length > 1">修改哪个角色的提示词 <select v-model="targetCharacter" :disabled="busy"><option value="">请选择</option><option v-for="name in characters" :key="name" :value="name">{{ name }}</option><option value="*">全部角色／画面</option></select></label>
-      <label>修改要求（可选）<textarea v-model="instruction" rows="2" :disabled="busy" placeholder="例如：把苏灿灿的靴子脱掉，保留腿部绑带" /></label>
+      <label>局部修改要求 <textarea v-model="instruction" rows="2" :disabled="busy" placeholder="例如：给苏灿灿的双脚穿上软布靴，只修改脚和鞋" /></label>
       <p v-if="error || generationError" class="bbi-inpaint-error">{{ error || generationError }}</p>
       <footer><button v-if="busy" type="button" @click="emit('cancel')">取消生成</button><button v-else type="button" @click="clear">清空涂抹与聚焦框</button><button type="button" :disabled="busy || (!hasMask && !focusBox)" @click="apply">{{ busy ? '正在重绘…' : '生成局部重绘图' }}</button></footer>
     </div>
