@@ -5,7 +5,7 @@ import { containsTagMarkup, type ImageTagContent } from '@/st/imageTagRegex';
 interface Edit { field: 'tag' | 'nl' | 'negative' | 'character.tag' | 'character.nl'; name?: string; old: string; next: string }
 
 /** 只允许模型对原有字段中的唯一精确片段做替换，或在字段末尾追加。 */
-export function applyTargetedEdits(base: ImageTagContent, edits: Edit[], allowNegative = true): ImageTagContent {
+export function applyTargetedEdits(base: ImageTagContent, edits: Edit[], allowNegative = true, targetCharacter?: string): ImageTagContent {
   if (!Array.isArray(edits) || !edits.length || edits.length > 8) throw new Error('AI 没有给出可应用的局部修改');
   const next: ImageTagContent = { ...base, characters: base.characters.map(item => ({ ...item })) };
   for (const edit of edits) {
@@ -13,6 +13,8 @@ export function applyTargetedEdits(base: ImageTagContent, edits: Edit[], allowNe
       !['tag', 'nl', 'negative', 'character.tag', 'character.nl'].includes(edit.field) ||
       containsTagMarkup(edit.next)) throw new Error('AI 返回的修改格式无效');
     if (edit.field === 'negative' && !allowNegative) throw new Error('当前 NovelAI 渠道不读取画面负面字段，请让 AI 修改正向词');
+    if (targetCharacter && (!edit.field.startsWith('character.') || edit.name !== targetCharacter))
+      throw new Error(`本次只允许修改角色「${targetCharacter}」的提示词`);
     const character = edit.field.startsWith('character.')
       ? next.characters.find(item => item.name === edit.name) : null;
     if (edit.field.startsWith('character.') && !character) throw new Error(`找不到角色「${edit.name ?? ''}」`);
@@ -32,10 +34,10 @@ export function applyTargetedEdits(base: ImageTagContent, edits: Edit[], allowNe
   return next;
 }
 
-export async function requestTargetedRewrite(base: ImageTagContent, instruction: string, signal?: AbortSignal): Promise<ImageTagContent> {
+export async function requestTargetedRewrite(base: ImageTagContent, instruction: string, signal?: AbortSignal, targetCharacter?: string): Promise<ImageTagContent> {
   const allowNegative = settings.defaultBackend !== 'nai';
   const messages: ChatMsg[] = [
-    { role: 'system', content: `你是图片提示词局部修改器。只输出 JSON：{"edits":[{"field":"tag|nl|${allowNegative ? 'negative|' : ''}character.tag|character.nl","name":"角色名（角色字段必填）","old":"原字段中精确且唯一的连续片段；追加时留空","next":"替换后的片段或追加词"}]}。不要输出完整提示词。仅修改用户要求涉及的词，其他角色、构图、画风和提示词保持原样。如果要去掉竹叶，替换竹叶相关词或在对应字段追加 leafless bamboo 等约束。old 必须逐字复制自对应原字段，不能猜测。最多 8 项。${allowNegative ? '' : '当前 NovelAI 不读取画面 negative 字段，禁止修改它；限制词写进正向 tag 或 nl。'}` },
+    { role: 'system', content: `你是图片提示词局部修改器。只输出 JSON：{"edits":[{"field":"tag|nl|${allowNegative ? 'negative|' : ''}character.tag|character.nl","name":"角色名（角色字段必填）","old":"原字段中精确且唯一的连续片段；追加时留空","next":"替换后的片段或追加词"}]}。不要输出完整提示词。仅修改用户要求涉及的词，其他角色、构图、画风和提示词保持原样。如果要去掉竹叶，替换竹叶相关词或在对应字段追加 leafless bamboo 等约束。old 必须逐字复制自对应原字段，不能猜测。最多 8 项。${targetCharacter ? `本次仅允许修改角色「${targetCharacter}」的 character.tag 或 character.nl，不要修改画面和其他角色。` : ''}${allowNegative ? '' : '当前 NovelAI 不读取画面 negative 字段，禁止修改它；限制词写进正向 tag 或 nl。'}` },
     { role: 'user', content: `原提示词 JSON：${JSON.stringify(base)}\n用户修改要求：${instruction}` },
   ];
   let edited: ImageTagContent | null = null;
@@ -45,7 +47,7 @@ export async function requestTargetedRewrite(base: ImageTagContent, instruction:
       const candidate = raw.match(/\{[\s\S]*\}/)?.[0];
       if (!candidate) throw new Error('AI 没有返回局部修改 JSON');
       const object = JSON.parse(candidate) as { edits?: Edit[] };
-      edited = applyTargetedEdits(base, object.edits ?? [], allowNegative);
+      edited = applyTargetedEdits(base, object.edits ?? [], allowNegative, targetCharacter);
     } catch (error) {
       validationError = error instanceof Error ? error.message : String(error);
       throw error;

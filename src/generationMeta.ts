@@ -74,6 +74,8 @@ export interface GenerationParams {
   guidance?: number;
   /** ComfyUI Anima 专用 shift。 */
   shift?: number;
+  /** 本次聚焦局部重绘实际使用的裁切区域和强度。 */
+  focus?: { x: number; y: number; width: number; height: number; sourceWidth: number; sourceHeight: number; strength: number };
 }
 
 /** 随图落盘的完整出图元信息。 */
@@ -93,6 +95,14 @@ export interface GenerationMeta {
   /** NAI 实际叠加的 vibe（被跳过的不在内）；其它后端为空数组。 */
   vibes: GenerationVibe[];
   params: GenerationParams;
+  /** 每张图实际使用的结构化提示词，避免局部重绘后仍显示楼层原词。 */
+  promptSnapshot?: {
+    tag: string;
+    nl: string;
+    negative: string;
+    characters: Array<{ name: string; tag: string; nl: string; negative?: string }>;
+    size: 'portrait' | 'landscape';
+  };
 }
 
 /** 强度等小数展示：整数不带小数点，其余最多 3 位、去掉尾随 0。 */
@@ -129,7 +139,11 @@ export function formatGenerationMeta(meta: GenerationMeta): string {
   }
   lines.push(`模型: ${meta.model}`);
   if (meta.width > 0 && meta.height > 0) {
-    lines.push(`尺寸: ${meta.width}×${meta.height}`);
+    lines.push(`${meta.params.focus ? '聚焦请求尺寸' : '尺寸'}: ${meta.width}×${meta.height}`);
+  }
+  if (meta.params.focus) {
+    const f = meta.params.focus;
+    lines.push(`聚焦区域: (${f.x}, ${f.y}) ${f.width}×${f.height} / 原图 ${f.sourceWidth}×${f.sourceHeight} · 强度 ${round(f.strength)}`);
   }
   if (meta.negative) {
     lines.push(`负面: ${meta.negative}`);

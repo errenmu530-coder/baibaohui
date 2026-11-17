@@ -304,6 +304,15 @@ export async function generateImage(
       };
     }
 
+    // 每张结果记录当次实际提示词；局部重绘不改楼层原 tag，也能连续编辑前一张结果。
+    if (input.inpaint) meta.promptSnapshot = {
+      tag: input.prompt,
+      nl: input.nl ?? '',
+      negative: input.negative ?? '',
+      characters: characters.map(character => ({ name: character.name, tag: character.tag,
+        nl: character.nl, negative: character.negative })),
+      size,
+    };
     // 退避文案到此为止:图已拿到,落盘还要一会儿,不该继续显示「稍后重试」
     progress.onRetry?.(null);
     return { result, seed: input.seed, size, backend: status.backend, charactersApplied, meta };

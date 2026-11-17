@@ -29,6 +29,7 @@ import { openLightbox } from '@/floor/lightbox';
 import { confirmImageMissing, isImageMissing } from '@/floor/missingImages';
 import { cancelTargetedRewrite, openPromptEditor } from '@/floor/promptEditor';
 import InpaintEditor from '@/floor/InpaintEditor.vue';
+import { compositeFocusedResult, type FocusedComposite } from '@/floor/focusedInpaint';
 import { requestTargetedRewrite } from '@/floor/targetedRewrite';
 import { charTagsBeforeFloor } from '@/state/charTags';
 import {
@@ -244,13 +245,17 @@ const promptText = computed(() =>
  */
 const shownEntry = computed(() => (liveHistory.value.length ? current.value : liveStale.value));
 const imageSrc = computed(() => shownEntry.value?.path ?? '');
+const shownPromptText = computed(() => {
+  const snapshot = shownEntry.value?.meta?.promptSnapshot;
+  return snapshot ? formatPromptText({ ...snapshot, kind: props.kind, layout: props.layout }) : promptText.value;
+});
 /**
  * 灯箱展示用:提示词 + 只读元信息(画师串/vibe/采样参数)。
  * 与卡片内可编辑的 `promptText` 分开 —— 元信息只读,绝不能混进可写回的 tag 文本。
  */
 const lightboxPrompt = computed(() => {
   const meta = shownEntry.value?.meta;
-  return [promptText.value, meta ? formatGenerationMeta(meta) : ''].filter(Boolean).join('\n\n');
+  return [shownPromptText.value, meta ? formatGenerationMeta(meta) : ''].filter(Boolean).join('\n\n');
 });
 
 /**
@@ -314,7 +319,7 @@ const pendingHint = computed(() => {
     : '未配置 ComfyUI,请到柏宝绘「渠道」页填写工作流';
 });
 
-async function runGenerate(inpaint?: { image: string; mask: string; width: number; height: number; strength: number; instruction: string }): Promise<void> {
+async function runGenerate(inpaint?: { image: string; mask: string; width: number; height: number; strength: number; instruction: string; focus: FocusedComposite; targetCharacter?: string }): Promise<void> {
   if (inpaint && !naiActive.value) {
     toastr.warning('局部重绘需要切回 NovelAI 渠道', '柏宝绘');
     return;
@@ -322,6 +327,7 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
   if (busy.value || planning.value || !canGenerate.value) return;
   const slot = key.value;
   const currentHash = hash.value;
+  const snapshot = inpaint ? shownEntry.value?.meta?.promptSnapshot : undefined;
   // 本次任务的输入全部就地取值:请求在途时本组件很可能已被重水合销毁
   // (任一兄弟槽位出图都会触发全楼重建),销毁后再读 props 不可靠。
   const job = {
@@ -329,12 +335,12 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
     swipeId: props.swipeId,
     seq: props.seq,
     tag: props.tag,
-    prompt: props.prompt,
-    nl: props.nl,
-    negative: props.negative,
-    characters: props.characters.map(character => ({
+    prompt: snapshot?.tag ?? props.prompt,
+    nl: snapshot?.nl ?? props.nl,
+    negative: snapshot?.negative ?? props.negative,
+    characters: (snapshot?.characters ?? props.characters).map(character => ({
       ...character,
-      negative: charTagsBeforeFloor(props.messageId + 1).find(entry => entry.name === character.name)?.negative ?? '',
+      negative: character.negative ?? charTagsBeforeFloor(props.messageId + 1).find(entry => entry.name === character.name)?.negative ?? '',
     })) as ImageCharacterPrompt[],
     size: effectiveSize.value,
     // 深拷贝:分镜在途期间本组件可能已被重水合销毁
@@ -350,7 +356,7 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
   try {
     if (inpaint?.instruction) {
       const edited = await requestTargetedRewrite({ tag: job.prompt, nl: job.nl, negative: job.negative,
-        characters: job.characters, size: job.size }, inpaint.instruction, signal);
+        characters: job.characters, size: job.size }, inpaint.instruction, signal, inpaint.targetCharacter);
       job.prompt = edited.tag;
       job.nl = edited.nl;
       job.negative = edited.negative;
@@ -393,9 +399,21 @@ async function runGenerate(inpaint?: { image: string; mask: string; width: numbe
     }
     // 落盘:图片进 ST 文件系统 + extra 写指针。成功后重水合,
     // 卡片从 extra 恢复为 ready(blob/dataURL 生命周期随之结束)。
-    await saveImageResult(job.messageId, job.swipeId, job.seq, job.tag, seed, result, meta);
+    const savedResult = inpaint ? await compositeFocusedResult(result, inpaint.focus) : result;
+    if (inpaint) {
+      meta.params.focus = { ...inpaint.focus.rect, sourceWidth: inpaint.focus.sourceWidth,
+        sourceHeight: inpaint.focus.sourceHeight, strength: inpaint.strength };
+    }
+    if (!isCurrentGen(slot, token)) {
+      result.revoke();
+      savedResult.revoke();
+      if (historyId !== null) safeHistory(() => failImage(historyId!, '', true));
+      return;
+    }
+    await saveImageResult(job.messageId, job.swipeId, job.seq, job.tag, seed, savedResult, meta);
     if (inpaint) inpaintOpen.value = false;
     result.revoke();
+    if (savedResult !== result) savedResult.revoke();
     if (historyId !== null) safeHistory(() => finishImage(historyId!));
     // 先清运行态再重水合:重水合会重建本组件,清完才不会带着 generating 复活
     clearGen(slot, token);
@@ -538,7 +556,7 @@ async function removeEntry(
 }
 
 async function copyPrompt(): Promise<void> {
-  await copyText(promptText.value, '提示词已复制');
+  await copyText(shownPromptText.value, '提示词已复制');
 }
 
 /** 另存当前展示的这张图(与灯箱共用 download.ts,免得两份逻辑漂移)。 */
@@ -768,8 +786,8 @@ onMounted(() => {
     </p>
 
     <!-- 提示词面板:悬浮 文本按钮唤起,复制按钮跟着面板走 -->
-    <div v-if="promptOpen && promptText" class="bbi-figure__prompt-box">
-      <pre class="bbi-figure__prompt">{{ promptText }}</pre>
+    <div v-if="promptOpen && shownPromptText" class="bbi-figure__prompt-box">
+      <pre class="bbi-figure__prompt">{{ shownPromptText }}</pre>
       <button class="bbi-figure__prompt-copy" type="button" title="复制提示词" @click="copyPrompt">
         <Icon name="copy" :size="14" />
       </button>
@@ -777,6 +795,6 @@ onMounted(() => {
       </div>
     </div>
   </div>
-  <InpaintEditor :open="inpaintOpen" :src="inpaintSource" :busy="busy" :generation-error="phase === 'error' ? error : ''"
+  <InpaintEditor :open="inpaintOpen" :src="inpaintSource" :characters="props.characters.map(character => character.name)" :busy="busy" :generation-error="phase === 'error' ? error : ''"
     @close="inpaintOpen = false" @cancel="cancel" @apply="runGenerate" />
 </template>
