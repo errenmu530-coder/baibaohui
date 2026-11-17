@@ -31,6 +31,54 @@ const SELECT_BUTTON_CLASS = 'bbi-select-action';
 const ICON_CLASS = 'fa-palette';
 
 let bound = false;
+let selectionButton: HTMLButtonElement | null = null;
+let floatingSelection: { floor: number; text: string } | null = null;
+
+function hideSelectionButton(): void {
+  selectionButton?.remove();
+  selectionButton = null;
+  floatingSelection = null;
+}
+
+function showSelectionButton(): void {
+  const selection = window.getSelection();
+  const text = selection?.toString().trim() ?? '';
+  const anchor = selection?.anchorNode;
+  const focus = selection?.focusNode;
+  const anchorEl = anchor instanceof Element ? anchor : anchor?.parentElement;
+  const focusEl = focus instanceof Element ? focus : focus?.parentElement;
+  const message = anchorEl?.closest<HTMLElement>('#chat .mes');
+  const body = anchorEl?.closest('.mes_text');
+  const floor = Number(message?.getAttribute('mesid'));
+  const story = getContext()?.chat?.[floor];
+  if (!text || text.length > 4000 || !message || !body || !focusEl ||
+    !body.contains(focusEl) || !isStoryMessage(story) || isCurrentChatExcluded() || !settings.enabled) {
+    hideSelectionButton();
+    return;
+  }
+  const rect = selection!.getRangeAt(0).getBoundingClientRect();
+  if (!rect.width && !rect.height) return;
+  floatingSelection = { floor, text };
+  if (!selectionButton) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = '🎨 生图';
+    button.title = '用选中的文字生成图片';
+    button.setAttribute('aria-label', '用选中的文字生成图片');
+    button.style.cssText = 'position:fixed;z-index:10010;padding:7px 12px;border:1px solid #aaa;border-radius:8px;background:#24242b;color:white;box-shadow:0 4px 15px #0008;cursor:pointer;font-size:14px';
+    // pointerdown 会使浏览器清除选区；提前截取的 floatingSelection 不受影响。
+    button.addEventListener('pointerdown', event => event.preventDefault());
+    button.addEventListener('click', () => {
+      const chosen = floatingSelection;
+      hideSelectionButton();
+      if (chosen) void requestSelectedTextTag(chosen.floor, chosen.text);
+    });
+    document.body.appendChild(button);
+    selectionButton = button;
+  }
+  selectionButton.style.left = `${Math.max(8, Math.min(window.innerWidth - 90, rect.left))}px`;
+  selectionButton.style.top = `${Math.max(8, Math.min(window.innerHeight - 42, rect.bottom + 7))}px`;
+}
 
 function setRunning(button: HTMLElement, running: boolean): void {
   button.dataset.running = running ? '1' : '';
@@ -167,6 +215,10 @@ export function bindTagActionButtons(): boolean {
   if (!ensureChatObserver()) return false;
   bound = true;
   onChatMutation(syncButtons);
+  document.addEventListener('pointerup', () => requestAnimationFrame(showSelectionButton));
+  document.addEventListener('keyup', () => requestAnimationFrame(showSelectionButton));
+  document.addEventListener('selectionchange', () => requestAnimationFrame(showSelectionButton));
+  document.addEventListener('scroll', hideSelectionButton, true);
   syncButtons();
   return true;
 }

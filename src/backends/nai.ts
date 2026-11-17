@@ -266,6 +266,8 @@ export interface NaiGenerateValues {
   seed?: number;
   /** 画幅方向;缺省竖屏(与改动前的固定默认一致)。 */
   size?: Orientation;
+  /** 局部重绘：原图/白色遮罩均为不带 data URL 前缀的 base64 PNG。 */
+  inpaint?: { image: string; mask: string; width: number; height: number; strength: number };
 }
 
 /**
@@ -628,6 +630,39 @@ export interface NaiImageOutput {
   usage: Pick<GenerationMeta, 'positive' | 'negative' | 'width' | 'height' | 'artist' | 'vibes' | 'params'>;
 }
 
+/** V5 Curated 官方目前借用 V4.5 Curated 的局部重绘模型。 */
+export function naiInpaintModel(model: string): string {
+  return model === 'nai-diffusion-5-curated'
+    ? 'nai-diffusion-4-5-curated-inpainting'
+    : `${model}-inpainting`;
+}
+
+export function addNaiInpaintParameters(
+  params: JsonObject,
+  source: NonNullable<NaiGenerateValues['inpaint']>,
+): void {
+  if (!source.image || !source.mask || source.width <= 0 || source.height <= 0) throw new NaiError('局部重绘缺少原图或遮罩');
+  params.width = source.width;
+  params.height = source.height;
+  params.image = source.image;
+  params.mask = source.mask;
+  params.strength = Math.min(1, Math.max(0.01, source.strength));
+  params.noise = 0;
+  params.img2img = { strength: params.strength, noise: 0, color_correct: false };
+}
+
+export function buildNaiRequestBody(nai: NaiRunConfig, values: NaiGenerateValues, params: JsonObject): JsonObject {
+  const promptNai: NaiRunConfig = values.inpaint && nai.model === 'nai-diffusion-5-curated'
+    ? { ...nai, model: 'nai-diffusion-4-5-curated' } : nai;
+  return {
+    input: fullPositivePrompt(promptNai, values.prompt, values.nl),
+    model: values.inpaint ? naiInpaintModel(nai.model) : nai.model,
+    action: values.inpaint ? 'infill' : 'generate',
+    parameters: params,
+    use_new_shared_trial: true,
+  };
+}
+
 /**
  * 生图。返回图片与本次实际使用的画师串/vibe/采样参数。
  *
@@ -645,8 +680,11 @@ export async function generateNaiImage(
   if (!values.prompt.trim()) throw new NaiError('正向提示词不能为空');
 
   // 画师串在发请求时解析一次，快照下来随图落盘：事后配方被删/改名也不丢。
-  const artist = naiArtistUsage(nai);
-  const params = buildNaiParameters(nai, values);
+  const requestNai: NaiRunConfig = values.inpaint && nai.model === 'nai-diffusion-5-curated'
+    ? { ...nai, model: 'nai-diffusion-4-5-curated' } : nai;
+  const artist = naiArtistUsage(requestNai);
+  const params = buildNaiParameters(requestNai, values);
+  if (values.inpaint) addNaiInpaintParameters(params, values.inpaint);
   const activeVibes = naiSupportsVibes(nai.model) ? nai.vibes : [];
   const loaded = new Map<string, NaiVibeData>();
   for (const vibe of activeVibes) {
@@ -673,13 +711,7 @@ export async function generateNaiImage(
     toastr.warning(`vibe「${skipped.join('、')}」${reason},已跳过`, '柏宝绘');
   }
 
-  const body = {
-    input: fullPositivePrompt(nai, values.prompt, values.nl),
-    model: nai.model,
-    action: 'generate',
-    parameters: params,
-    use_new_shared_trial: true,
-  };
+  const body = buildNaiRequestBody(nai, values, params);
   // 只把「发请求 + 解包」包进重试:上面拼参数、读 vibe 数据的活是一次性的,
   // 重跑它们既白费功夫,也会把 vibe 缺编码的 toastr 警告重复弹出来。
   const result = await runNaiWithRetry(
@@ -711,10 +743,10 @@ export async function generateNaiImage(
     result,
     usage: {
       // positive 即顶层 input / v4_prompt 里那份全文（含画师串与质量词）
-      positive: fullPositivePrompt(nai, values.prompt, values.nl),
+      positive: fullPositivePrompt(requestNai, values.prompt, values.nl),
       negative: [
-        fullNegativePrompt(nai),
-        ...(naiFixedSettings(nai.model) ? [] : (values.characters ?? [])
+        fullNegativePrompt(requestNai),
+        ...(naiFixedSettings(requestNai.model) ? [] : (values.characters ?? [])
           .filter(character => character.negative?.trim())
           .map(character => `角色 ${character.name}: ${character.negative!.trim()}`)),
       ].join('\n'),
@@ -722,7 +754,7 @@ export async function generateNaiImage(
       height: params.height as number,
       artist,
       vibes: applied,
-      params: naiParamsSnapshot(params, nai),
+      params: naiParamsSnapshot(params, requestNai),
     },
   };
 }

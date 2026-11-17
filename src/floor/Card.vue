@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import type { ImageCharacterPrompt } from '@/autoTag/protocol';
-import { cancelFloorTags, requestFloorTags } from '@/autoTag/runner';
+import { requestFloorTags } from '@/autoTag/runner';
 import type { ComicLayout } from '@/backends/mossLayout';
 import { effectiveOrientation, type Orientation } from '@/backends/size';
 import Icon from '@/components/Icon.vue';
@@ -27,7 +27,9 @@ import {
 import { hydrateMessage } from '@/floor/hydrate';
 import { openLightbox } from '@/floor/lightbox';
 import { confirmImageMissing, isImageMissing } from '@/floor/missingImages';
-import { openPromptEditor } from '@/floor/promptEditor';
+import { cancelTargetedRewrite, openPromptEditor } from '@/floor/promptEditor';
+import InpaintEditor from '@/floor/InpaintEditor.vue';
+import { requestTargetedRewrite } from '@/floor/targetedRewrite';
 import { charTagsBeforeFloor } from '@/state/charTags';
 import {
   deleteImageResult,
@@ -117,6 +119,8 @@ watch(
 );
 
 const promptOpen = ref(false);
+const inpaintOpen = ref(false);
+const inpaintSource = ref('');
 
 /**
  * 折叠态:存模块级 store 按槽位 key 认领(组件随时被水合重建,ref 会丢),
@@ -310,7 +314,11 @@ const pendingHint = computed(() => {
     : '未配置 ComfyUI,请到柏宝绘「渠道」页填写工作流';
 });
 
-async function generate(): Promise<void> {
+async function runGenerate(inpaint?: { image: string; mask: string; width: number; height: number; strength: number; instruction: string }): Promise<void> {
+  if (inpaint && !naiActive.value) {
+    toastr.warning('局部重绘需要切回 NovelAI 渠道', '柏宝绘');
+    return;
+  }
   if (busy.value || planning.value || !canGenerate.value) return;
   const slot = key.value;
   const currentHash = hash.value;
@@ -327,19 +335,28 @@ async function generate(): Promise<void> {
     characters: props.characters.map(character => ({
       ...character,
       negative: charTagsBeforeFloor(props.messageId + 1).find(entry => entry.name === character.name)?.negative ?? '',
-    })),
+    })) as ImageCharacterPrompt[],
     size: effectiveSize.value,
     // 深拷贝:分镜在途期间本组件可能已被重水合销毁
     comic: props.kind === 'comic' && props.layout ? (JSON.parse(JSON.stringify(props.layout)) as ComicLayout) : undefined,
+    inpaint: inpaint ? { image: inpaint.image, mask: inpaint.mask, width: inpaint.width, height: inpaint.height, strength: inpaint.strength } : undefined,
   };
   // 漫画没有 tag,历史里记人读形态的分镜,回溯时才看得出画的是哪一页
-  const historyPrompt = job.comic ? promptText.value : job.prompt;
   // NAI 需要闸门排队 → 先显示「排队中」;ComfyUI 有服务端队列,直接进 generating
   const { signal, token } = beginGen(slot, currentHash, naiActive.value ? 'queued' : 'generating');
   // 历史记录 id:在 seed 确定后才登记(见下),故这里先置空,catch 里据此判断要不要收尾。
   let historyId: number | null = null;
 
   try {
+    if (inpaint?.instruction) {
+      const edited = await requestTargetedRewrite({ tag: job.prompt, nl: job.nl, negative: job.negative,
+        characters: job.characters, size: job.size }, inpaint.instruction, signal);
+      job.prompt = edited.tag;
+      job.nl = edited.nl;
+      job.negative = edited.negative;
+      job.characters = edited.characters;
+    }
+    const historyPrompt = job.comic ? promptText.value : job.prompt;
     // 发起时就确定种子(NAI 方案种子 > 0 时用固定值;否则随机),随结果落盘进 extra
     // (entry.seed),历史翻页可查/可复用。口径在 generate.ts,与公开接口同源。
     const seed = decideSeed(settings.defaultBackend);
@@ -377,6 +394,7 @@ async function generate(): Promise<void> {
     // 落盘:图片进 ST 文件系统 + extra 写指针。成功后重水合,
     // 卡片从 extra 恢复为 ready(blob/dataURL 生命周期随之结束)。
     await saveImageResult(job.messageId, job.swipeId, job.seq, job.tag, seed, result, meta);
+    if (inpaint) inpaintOpen.value = false;
     result.revoke();
     if (historyId !== null) safeHistory(() => finishImage(historyId!));
     // 先清运行态再重水合:重水合会重建本组件,清完才不会带着 generating 复活
@@ -394,6 +412,15 @@ async function generate(): Promise<void> {
       failGen(slot, token, e instanceof Error ? e.message : String(e));
     }
   }
+}
+
+function generate(): Promise<void> { return runGenerate(); }
+
+function openInpaint(): void {
+  if (!shownEntry.value || !naiActive.value || !canGenerate.value) return;
+  inpaintSource.value = shownEntry.value.path;
+  inpaintOpen.value = true;
+  menuOpen.value = false;
 }
 
 /**
@@ -470,7 +497,7 @@ function openEditor(): void {
  * 的每楼请求锁。
  */
 function cancelReplan(): void {
-  cancelFloorTags(props.messageId);
+  cancelTargetedRewrite(key.value);
 }
 
 /** 删除当前展示的这一条结果(DESIGN-FLOOR-UI.md §8.2)。 */function removeCurrent(): void {
@@ -659,6 +686,8 @@ onMounted(() => {
           >
             <Icon name="refresh" :size="15" />
           </button>
+          <button v-if="shownEntry && naiActive && kind !== 'comic'" class="bbi-fab" type="button"
+            :disabled="!canGenerate" title="涂抹局部重绘" @click="openInpaint">🖌</button>
           <button
             v-if="shownEntry"
             class="bbi-fab"
@@ -748,4 +777,6 @@ onMounted(() => {
       </div>
     </div>
   </div>
+  <InpaintEditor :open="inpaintOpen" :src="inpaintSource" :busy="busy" :generation-error="phase === 'error' ? error : ''"
+    @close="inpaintOpen = false" @cancel="cancel" @apply="runGenerate" />
 </template>

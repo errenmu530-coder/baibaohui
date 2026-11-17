@@ -34,6 +34,7 @@ import {
   markForAutoGenerate,
 } from '@/floor/autoGenerate';
 import { applyMessageText, type ApplyMessageResult } from '@/st/messageEdit';
+import { insertSelectedImageTag, selectedInsertion } from '@/floor/selectionInsert';
 import { getContext, isAiStoryMessage, isStoryMessage, type STMessage } from '@/st/context';
 import {
   hasImageTagTrace,
@@ -442,7 +443,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
 
     // 单槽重写不落 changes:首次全量分析已为整楼建过档,这里再应用一次只会产生
     // 重复的建档/变更记录;库文本已含本楼增量(见上面 entriesBefore),AI 照抄即可。
-    const planOps = slot || (opts.selectedText && hasImageTagTrace(rawSource)) ? [] : planChangeOps(plan);
+    const planOps = slot || opts.selectedText ? [] : planChangeOps(plan);
     // 锁定角色(全局库)不接受 AI changes:丢弃,不写入楼层、不参与 @替换。
     // 重放侧 applyCharTagOps 也会按锁定名再拦一次(旧消息里可能已存这类 ops)。
     const effectiveOps = lockedNames.size
@@ -542,12 +543,19 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
     // 单槽重写是用户在卡片上的显式意图(同提示词编辑弹窗的「应用并重新生成」),
     // 不受 autoTag.autoGenerate 开关约束,一律 force 出图。
     const markSwipeId = message.swipe_id ?? 0;
+    const selectedTarget = opts.selectedText
+      ? selectedInsertion(context.chat[floor]?.mes ?? '', opts.selectedText)
+      : null;
+    if (opts.selectedText && !selectedTarget) {
+      toastr.warning('无法在楼层原文中唯一定位选中文字，未写入生图标签', '柏宝绘');
+      return;
+    }
     const marked = plan.images.length > 0 && (settings.autoTag.autoGenerate || !!slot || !!opts.selectedText);
     if (marked) {
       if (slot) {
         markForAutoGenerate(chatId, floor, markSwipeId, slot.seq, 'force');
-      } else if (opts.selectedText) {
-        markForAutoGenerate(chatId, floor, markSwipeId, parseImageTags(rawSource).length, 'force');
+      } else if (selectedTarget) {
+        markForAutoGenerate(chatId, floor, markSwipeId, selectedTarget.seq, 'force');
       } else {
         for (let seq = 0; seq < plan.images.length; seq++) {
           markForAutoGenerate(chatId, floor, markSwipeId, seq);
@@ -567,10 +575,10 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
           if (parseImageTags(currentText)[slot.seq] !== slotRawTag) return null;
           return replaceImageTagAt(currentText, slot.seq, serializeImageTag(plan.images[0]));
         }
-        if (opts.selectedText && hasImageTagTrace(currentText)) {
-          if (!plan.images.length) return currentText;
-          if (parseImageTags(currentText).length !== parseImageTags(rawSource).length) return null;
-          return `${currentText.trimEnd()}\n${serializeImageTag(plan.images[0])}`;
+        if (opts.selectedText) {
+          const target = selectedInsertion(currentText, opts.selectedText);
+          if (!target || target.seq !== selectedTarget?.seq) return null;
+          return insertSelectedImageTag(currentText, opts.selectedText, serializeImageTag(plan.images[0]));
         }
         // replace 路径同样以当前正文为基底剔除旧 tag,不能用旧快照
         const base = opts.replace ? stripImageTags(currentText) : currentText;
@@ -591,7 +599,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       swipeId,
       message,
       // 单槽不写法:本楼角色增量与其它槽位图片都不归它管,不传 extraUpdate 即保持原样。
-      slot || (opts.selectedText && hasImageTagTrace(rawSource))
+      slot || opts.selectedText
         ? undefined
         : {
             key: BBI_CHAR_EXTRA_KEY,

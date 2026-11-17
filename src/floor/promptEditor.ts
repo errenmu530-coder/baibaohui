@@ -1,7 +1,7 @@
 import { h, render } from 'vue';
 
 import PromptEditor from '@/floor/PromptEditor.vue';
-import { cancelFloorTags, requestSlotTag } from '@/autoTag/runner';
+import { requestTargetedRewrite } from '@/floor/targetedRewrite';
 import { markForAutoGenerate, consumeAutoGenerate } from '@/floor/autoGenerate';
 import { hydrateMessage } from '@/floor/hydrate';
 import { awaitTagPlan, isTagPlanning, runTagPlan } from '@/floor/tagPlanState';
@@ -59,6 +59,8 @@ export interface PromptEditorOptions {
 
 /** 同一时刻只允许一个编辑弹窗,重复调用先关旧的。 */
 let closeCurrent: (() => void) | null = null;
+const rewriteControllers = new Map<string, AbortController>();
+export function cancelTargetedRewrite(key: string): void { rewriteControllers.get(key)?.abort(); }
 
 /** 离场动画时长,与 base.css 的 .bbi-modal-enter/leave-active(0.15s)对齐。 */
 const LEAVE_MS = 160;
@@ -202,6 +204,7 @@ export function openPromptEditor(options: PromptEditorOptions): void {
    * 与他自己手打、还没点应用的草稿长得一样 —— 不明说一句,没法分辨哪份已经生效。
    */
   let rewritten = false;
+  let rewriteController: AbortController | null = null;
   /** 本槽位的运行态 key,与 genState / tagPlanState 同构。 */
   const planKey = slotKey(options.at.chatId, options.at.messageId, options.at.swipeId, options.at.seq);
   /**
@@ -258,13 +261,30 @@ export function openPromptEditor(options: PromptEditorOptions): void {
    */
   const startRewrite = (instruction: string): void => {
     if (busy || closing || isTagPlanning(planKey)) return;
-    const task = runTagPlan(planKey, () => requestSlotTag(options.at.messageId, options.at.seq, instruction));
+    rewriteController = new AbortController();
+    const controller = rewriteController;
+    rewriteControllers.set(planKey, controller);
+    const base = content;
+    const expectedRaw = rawTag;
+    const task = runTagPlan(planKey, async () => {
+      try {
+        const changed = await requestTargetedRewrite(base, instruction, controller.signal);
+        if (controller.signal.aborted) return;
+        const ok = await writeBack({ ...options.at, rawTag: expectedRaw }, changed, true);
+        if (ok) toastr.success('已局部修改提示词，正在重新生图', '柏宝绘');
+      } catch (error) {
+        if (!controller.signal.aborted) toastr.error(error instanceof Error ? error.message : String(error), '柏宝绘');
+        throw error;
+      }
+    });
     paint();
     void task
       .catch(() => {
         // 失败原因 runner 已经 toast 过了,这里只负责把转圈停掉
       })
       .finally(() => {
+        if (rewriteController === controller) rewriteController = null;
+        if (rewriteControllers.get(planKey) === controller) rewriteControllers.delete(planKey);
         refreshFromMessage();
         paint();
       });
@@ -352,7 +372,7 @@ export function openPromptEditor(options: PromptEditorOptions): void {
           dirty = value;
         },
         onRewrite: rewrite,
-        onCancelRewrite: () => cancelFloorTags(options.at.messageId),
+        onCancelRewrite: () => rewriteController?.abort(),
         onApply: (value: ImageTagContent, regenerate: boolean) => {
           if (busy || closing) return;
           busy = true;
