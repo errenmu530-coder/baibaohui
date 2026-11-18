@@ -27,7 +27,7 @@ import {
 import { hydrateMessage } from '@/floor/hydrate';
 import { openLightbox } from '@/floor/lightbox';
 import { confirmImageMissing, isImageMissing } from '@/floor/missingImages';
-import { cancelTargetedRewrite, openPromptEditor } from '@/floor/promptEditor';
+import { cancelPromptRewrite, openPromptEditor } from '@/floor/promptEditor';
 import { charTagsBeforeFloor } from '@/state/charTags';
 import {
   deleteImageResult,
@@ -481,7 +481,7 @@ function openEditor(): void {
  * 的每楼请求锁。
  */
 function cancelReplan(): void {
-  cancelTargetedRewrite(key.value);
+  cancelPromptRewrite(key.value, props.messageId);
 }
 
 /** 删除当前展示的这一条结果(DESIGN-FLOOR-UI.md §8.2)。 */function removeCurrent(): void {

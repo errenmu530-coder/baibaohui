@@ -57,7 +57,7 @@ const emit = defineEmits<{
   /** 应用;regenerate=true 表示写回后直接开跑出图。 */
   (e: 'apply', value: ImageTagContent, regenerate: boolean): void;
   /** 请求 AI 重写这一张的提示词(落盘与出图由调用方做,本组件只负责把结果读回草稿)。 */
-  (e: 'rewrite', instruction: string): void;
+  (e: 'rewrite', instruction: string, mode: 'targeted' | 'full'): void;
   /** 取消在途的 AI 重写。 */
   (e: 'cancel-rewrite'): void;
   /** 草稿是否已改动(调用方据此决定关窗前要不要问「放弃修改?」)。 */
@@ -196,10 +196,10 @@ function apply(regenerate: boolean): void {
   emit('apply', draft.value, regenerate);
 }
 
-function rewrite(): void {
+function rewrite(mode: 'targeted' | 'full'): void {
   if (props.busy || props.rewriting || drawBlocked.value) return;
-  if (!rewriteInstruction.value.trim()) return;
-  emit('rewrite', rewriteInstruction.value.trim());
+  if (mode === 'targeted' && !rewriteInstruction.value.trim()) return;
+  emit('rewrite', rewriteInstruction.value.trim(), mode);
 }
 
 /**
@@ -257,20 +257,30 @@ onBeforeUnmount(() => {
         </button>
       </header>
 
-      <!-- AI 重写:手改与 AI 改是同一件事的两种手段,故聚在同一个弹窗里。
-           跑完直接落盘并出图(见 promptEditor.ts),结果回填到下面的输入框。 -->
+      <!-- 局部修改保留其它词；完整重写重新生成这一张的整套提示词。 -->
       <div class="bbi-rewrite-row">
         <BbiTextarea v-if="!rewriting" v-model="rewriteInstruction" class="bbi-rewrite-instruction" :rows="2" :max-rows="5"
-          placeholder="用自然语言描述想改哪里，例如：把这张图里小雪的头发画长一些，其他保持不变" />
+          placeholder="修改要求（完整重写可留空），例如：把小雪的头发画长一些" />
+        <p v-if="!rewriting" class="bbi-editor-note">局部修改只调整要求涉及的词；完整重写会重新组织这一张图的整套提示词。</p>
         <button
           v-if="!rewriting"
           class="bbi-btn bbi-btn-sm"
           type="button"
           :disabled="busy || !!drawBlocked || !rewriteInstruction.trim()"
-          :title="drawBlocked || '让 AI 重读本楼正文，把这一张的提示词重写一遍'"
-          @click="rewrite"
+          :title="drawBlocked || '只修改要求涉及的提示词，保留其它词'"
+          @click="rewrite('targeted')"
         >
-          <Icon name="sparkles" /> 按要求修改并重新生图
+          <Icon name="sparkles" /> 局部修改并重新生图
+        </button>
+        <button
+          v-if="!rewriting"
+          class="bbi-btn bbi-btn-sm"
+          type="button"
+          :disabled="busy || !!drawBlocked"
+          :title="drawBlocked || '重读本楼正文，完整重写这一张图的提示词；修改要求可以留空'"
+          @click="rewrite('full')"
+        >
+          <Icon name="sparkles" /> 完整重写并重新生图
         </button>
         <template v-else>
           <span class="bbi-rewrite-busy">

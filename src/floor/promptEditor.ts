@@ -2,6 +2,7 @@ import { h, render } from 'vue';
 
 import PromptEditor from '@/floor/PromptEditor.vue';
 import { requestTargetedRewrite } from '@/floor/targetedRewrite';
+import { cancelFloorTags, requestSlotTag } from '@/autoTag/runner';
 import { markForAutoGenerate, consumeAutoGenerate } from '@/floor/autoGenerate';
 import { hydrateMessage } from '@/floor/hydrate';
 import { awaitTagPlan, isTagPlanning, runTagPlan } from '@/floor/tagPlanState';
@@ -60,7 +61,12 @@ export interface PromptEditorOptions {
 /** 同一时刻只允许一个编辑弹窗,重复调用先关旧的。 */
 let closeCurrent: (() => void) | null = null;
 const rewriteControllers = new Map<string, AbortController>();
-export function cancelTargetedRewrite(key: string): void { rewriteControllers.get(key)?.abort(); }
+/** 两种重写共用一个取消入口；完整重写的请求由 runner 按楼层管理。 */
+export function cancelPromptRewrite(key: string, floor: number): void {
+  const targeted = rewriteControllers.get(key);
+  if (targeted) targeted.abort();
+  else if (isTagPlanning(key)) cancelFloorTags(floor);
+}
 
 /** 离场动画时长,与 base.css 的 .bbi-modal-enter/leave-active(0.15s)对齐。 */
 const LEAVE_MS = 160;
@@ -259,21 +265,25 @@ export function openPromptEditor(options: PromptEditorOptions): void {
    * runner 自己会落盘并 force 出图,所以这里只负责收尾后把新提示词读回来、重绘。
    * 弹窗**不自动关**——点一下就闪退像是崩了。
    */
-  const startRewrite = (instruction: string): void => {
+  const startRewrite = (instruction: string, mode: 'targeted' | 'full'): void => {
     if (busy || closing || isTagPlanning(planKey)) return;
-    rewriteController = new AbortController();
-    const controller = rewriteController;
-    rewriteControllers.set(planKey, controller);
+    const controller = mode === 'targeted' ? new AbortController() : null;
+    rewriteController = controller;
+    if (controller) rewriteControllers.set(planKey, controller);
     const base = content;
     const expectedRaw = rawTag;
     const task = runTagPlan(planKey, async () => {
       try {
-        const changed = await requestTargetedRewrite(base, instruction, controller.signal);
-        if (controller.signal.aborted) return;
-        const ok = await writeBack({ ...options.at, rawTag: expectedRaw }, changed, true);
-        if (ok) toastr.success('已局部修改提示词，正在重新生图', '柏宝绘');
+        if (mode === 'full') {
+          await requestSlotTag(options.at.messageId, options.at.seq, instruction);
+        } else if (controller) {
+          const changed = await requestTargetedRewrite(base, instruction, controller.signal);
+          if (controller.signal.aborted) return;
+          const ok = await writeBack({ ...options.at, rawTag: expectedRaw }, changed, true);
+          if (ok) toastr.success('已局部修改提示词，正在重新生图', '柏宝绘');
+        }
       } catch (error) {
-        if (!controller.signal.aborted) toastr.error(error instanceof Error ? error.message : String(error), '柏宝绘');
+        if (!controller?.signal.aborted) toastr.error(error instanceof Error ? error.message : String(error), '柏宝绘');
         throw error;
       }
     });
@@ -283,8 +293,8 @@ export function openPromptEditor(options: PromptEditorOptions): void {
         // 失败原因 runner 已经 toast 过了,这里只负责把转圈停掉
       })
       .finally(() => {
-        if (rewriteController === controller) rewriteController = null;
-        if (rewriteControllers.get(planKey) === controller) rewriteControllers.delete(planKey);
+        if (controller && rewriteController === controller) rewriteController = null;
+        if (controller && rewriteControllers.get(planKey) === controller) rewriteControllers.delete(planKey);
         refreshFromMessage();
         paint();
       });
@@ -297,20 +307,20 @@ export function openPromptEditor(options: PromptEditorOptions): void {
    * (不顶掉更糟——用户接着点「应用」会拿旧草稿把刚重写的覆盖回去)。手打了半天被一次
    * 点击无声吞掉是丢数据,口径同 requestClose;共用 asking 挡住叠出好几个确认框。
    */
-  const rewrite = (instruction: string): void => {
+  const rewrite = (instruction: string, mode: 'targeted' | 'full'): void => {
     if (busy || asking || closing || isTagPlanning(planKey)) return;
     if (!dirty) {
-      startRewrite(instruction);
+      startRewrite(instruction, mode);
       return;
     }
     asking = true;
     void confirmDialog({
-      title: 'AI 重写提示词',
-      text: '你手改的内容还没有应用。AI 重写完会直接保存，并把这些改动顶掉。',
-      confirmText: '重写',
+      title: mode === 'full' ? '完整重写提示词' : '局部修改提示词',
+      text: '你手改的内容还没有应用。AI 修改完会直接保存，并覆盖这些未保存的改动。',
+      confirmText: '继续',
     }).then(ok => {
       asking = false;
-      if (ok) startRewrite(instruction);
+      if (ok) startRewrite(instruction, mode);
     });
   };
 
@@ -372,7 +382,7 @@ export function openPromptEditor(options: PromptEditorOptions): void {
           dirty = value;
         },
         onRewrite: rewrite,
-        onCancelRewrite: () => rewriteController?.abort(),
+        onCancelRewrite: () => cancelPromptRewrite(planKey, options.at.messageId),
         onApply: (value: ImageTagContent, regenerate: boolean) => {
           if (busy || closing) return;
           busy = true;
