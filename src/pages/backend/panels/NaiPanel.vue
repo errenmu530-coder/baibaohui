@@ -74,7 +74,7 @@ import {
   type NaiPlan,
   type NaiVibe,
 } from '@/state/settings';
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 
 /** 本渠道是否为当前出图渠道;「用 NovelAI 出图」按钮与设置页选择器、页签徽标同属一个开关。 */
 const inUse = computed(() => settings.defaultBackend === 'nai');
@@ -146,10 +146,21 @@ const plan = computed(
 const planOpen = computed(
   () => !!editingPlanId.value && settings.nai.plans.some(p => p.id === editingPlanId.value),
 );
+const samplingSection = ref<HTMLElement | null>(null);
 
 function openPlan(target: { id: string }) {
   planVibeSearch.value = '';
   editingPlanId.value = target.id;
+}
+
+async function openSampling(): Promise<void> {
+  openPlan(active.value);
+  await nextTick();
+  const section = samplingSection.value;
+  const modal = section?.closest<HTMLElement>('.plan-modal');
+  if (section && modal) {
+    modal.scrollTop += section.getBoundingClientRect().top - modal.getBoundingClientRect().top - 70;
+  }
 }
 
 function closePlan() {
@@ -889,6 +900,10 @@ async function removeVibe(vibe: NaiVibe) {
             用 NovelAI 出图
           </button>
         </div>
+        <div class="sampling-shortcut">
+          <span>当前方案：采样器 {{ planFixed ? planFixedSamplerLabel : active.sampler }} · 噪声表 {{ active.noiseSchedule }} · {{ planFixed ? planFixed.steps : active.steps }} 步</span>
+          <button class="bbi-btn bbi-btn-sm" type="button" @click="openSampling">设置采样与噪声</button>
+        </div>
       </Collapsible>
 
       <Collapsible title="接入点" :open="false">
@@ -1624,7 +1639,7 @@ async function removeVibe(vibe: NaiVibe) {
           </datalist>
         </section>
 
-        <section class="grp-sec">
+        <section ref="samplingSection" class="grp-sec">
           <div class="grp-cap">采样</div>
           <div class="grp">
             <div class="grp-row">
@@ -2219,6 +2234,17 @@ async function removeVibe(vibe: NaiVibe) {
 .plan-modal {
   max-width: 600px;
   gap: 16px;
+}
+.sampling-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--bbi-ink-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .plan-name-input {
   padding: 9px 12px;

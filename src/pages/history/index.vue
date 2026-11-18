@@ -12,6 +12,7 @@ import {
   type LlmRecord,
 } from '@/state/history';
 import { copyText } from '@/st/clipboard';
+import { clearDiagnostics, diagnosticEntries } from '@/state/diagnostics';
 
 /**
  * 请求历史页。
@@ -34,6 +35,7 @@ interface Segment {
 }
 
 const filter = ref<Filter>('all');
+const view = ref<'requests' | 'runtime'>('requests');
 /** 弹窗里正在看的那一段(null = 关闭)。 */
 const viewing = ref<{ title: string; segment: Segment } | null>(null);
 
@@ -142,17 +144,31 @@ function copyAll(record: HistoryRecord): void {
   const body = segments(record).map(s => `--- ${s.label} ---\n${s.text}`);
   void copyText([...head, '', ...body].join('\n'), '记录已复制');
 }
+
+function copyDiagnostics(): void {
+  const lines = diagnosticEntries.map(entry =>
+    `${new Date(entry.at).toLocaleString()} [${entry.level}] ${entry.event}${entry.detail ? ` · ${entry.detail}` : ''}`,
+  );
+  void copyText(lines.join('\n'), '运行日志已复制');
+}
 </script>
 
 <template>
   <section class="bbi-page">
     <div class="bbi-page-head">
-      <h2 class="bbi-title bbi-title-sub">请求历史</h2>
-      <span class="bbi-count" title="本次会话已记录的请求数">{{ records.length }}</span>
+      <h2 class="bbi-title bbi-title-sub">日志与请求历史</h2>
+      <span class="bbi-count" title="本次页面会话的记录数">{{ view === 'requests' ? records.length : diagnosticEntries.length }}</span>
     </div>
     <hr class="bbi-rule" />
 
-    <div class="bbi-hist-bar">
+    <div class="bbi-segmented" role="tablist" aria-label="查看记录">
+      <button class="bbi-seg" :class="{ 'is-on': view === 'requests' }" type="button" role="tab"
+        :aria-selected="view === 'requests'" @click="view = 'requests'">请求历史</button>
+      <button class="bbi-seg" :class="{ 'is-on': view === 'runtime' }" type="button" role="tab"
+        :aria-selected="view === 'runtime'" @click="view = 'runtime'">运行日志</button>
+    </div>
+
+    <div v-if="view === 'requests'" class="bbi-hist-bar">
       <div class="bbi-segmented-wrap">
         <div class="bbi-segmented" role="tablist" aria-label="记录类型">
           <button
@@ -180,7 +196,7 @@ function copyAll(record: HistoryRecord): void {
     </div>
 
     <!-- 一条请求 = 一个折叠区 -->
-    <div v-if="shown.length" class="bbi-sections">
+    <div v-if="view === 'requests' && shown.length" class="bbi-sections">
       <Collapsible v-for="record in shown" :key="record.id" :open="false">
         <template #header>
           <span class="bbi-hist-head">
@@ -239,10 +255,33 @@ function copyAll(record: HistoryRecord): void {
         </div>
       </Collapsible>
     </div>
-    <p v-else-if="records.length" class="bbi-field-hint">当前筛选下没有记录。</p>
-    <p v-else class="bbi-field-hint">
+    <p v-else-if="view === 'requests' && records.length" class="bbi-field-hint">当前筛选下没有记录。</p>
+    <p v-else-if="view === 'requests'" class="bbi-field-hint">
       本次会话还没有请求记录。触发一次自动 tag 或生成一张图，这里就会出现条目（刷新页面会清空）。
     </p>
+
+    <template v-if="view === 'runtime'">
+      <div class="bbi-hist-bar">
+        <p class="bbi-field-hint">记录自动 tag、选段定位和标签写入的运行事件；副 API 与生图请求详情请看“请求历史”。刷新页面后清空。</p>
+        <div class="bbi-log-actions">
+          <button class="bbi-btn bbi-btn-sm" type="button" :disabled="!diagnosticEntries.length" @click="copyDiagnostics">
+            <Icon name="copy" /> 复制日志
+          </button>
+          <button class="bbi-btn bbi-btn-danger bbi-btn-sm" type="button" :disabled="!diagnosticEntries.length" @click="clearDiagnostics">
+            <Icon name="trash" /> 清空
+          </button>
+        </div>
+      </div>
+      <div v-if="diagnosticEntries.length" class="bbi-runtime-list">
+        <div v-for="entry in diagnosticEntries" :key="entry.id" class="bbi-runtime-item" :class="`is-${entry.level}`">
+          <span class="bbi-runtime-time">{{ new Date(entry.at).toLocaleTimeString() }}</span>
+          <span class="bbi-runtime-level">{{ entry.level === 'error' ? '错误' : entry.level === 'warning' ? '提醒' : '信息' }}</span>
+          <span class="bbi-runtime-event">{{ entry.event }}</span>
+          <span v-if="entry.detail" class="bbi-runtime-detail">{{ entry.detail }}</span>
+        </div>
+      </div>
+      <p v-else class="bbi-field-hint">目前没有运行日志。</p>
+    </template>
 
     <!-- ===== 单段全文弹窗 ===== -->
     <ModalMask :open="!!viewing" @close="viewing = null">
@@ -288,7 +327,40 @@ function copyAll(record: HistoryRecord): void {
   justify-content: space-between;
   gap: 12px;
   margin: 12px 0;
+  flex-wrap: wrap;
 }
+
+.bbi-log-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bbi-runtime-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.bbi-runtime-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--bbi-line);
+  border-radius: var(--bbi-radius-sm);
+  background: var(--bbi-surface);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.bbi-runtime-item.is-error { border-color: #c97878; }
+.bbi-runtime-item.is-warning { border-color: #d3a257; }
+.bbi-runtime-time { color: var(--bbi-ink-soft); white-space: nowrap; }
+.bbi-runtime-level { font-weight: 700; }
+.bbi-runtime-event { font-weight: 600; }
+.bbi-runtime-detail { color: var(--bbi-ink-soft); }
 
 /* —— 折叠区标题行:名称 + 渠道 + token + 时间 + 状态 ——
    收缩优先级(挤不下时谁先让路):渠道/模型 → 标题 → 时间;

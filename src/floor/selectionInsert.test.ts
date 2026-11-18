@@ -17,4 +17,15 @@ describe('selectedInsertion', () => {
   it('跨行选区落在最后一行后', () => {
     expect(insertSelectedImageTag('甲。\n乙。\n丙。', '甲。 乙。', fresh)).toBe(`甲。\n乙。\n${fresh}\n丙。`);
   });
+  it('跨段选择渲染后的 Markdown 文字，仍落在最后一段后', () => {
+    const source = `**甲段。**\n\n_乙段。_\n丙段。`;
+    expect(insertSelectedImageTag(source, '甲段。\n乙段。', fresh)).toBe(`**甲段。**\n\n_乙段。_\n${fresh}\n丙段。`);
+  });
+  it('跨段选择带链接和 HTML 样式的文字', () => {
+    const source = `甲<a href="/x">乙</a>。\n[丙](https://example.com)丁。\n戊。`;
+    expect(insertSelectedImageTag(source, '甲乙。\n丙丁。', fresh)).toBe(`甲<a href="/x">乙</a>。\n[丙](https://example.com)丁。\n${fresh}\n戊。`);
+  });
+  it('渲染后仍有多个匹配位置时拒绝猜测', () => {
+    expect(insertSelectedImageTag('**甲段。**\n乙段。\n甲段。\n乙段。', '甲段。\n乙段。', fresh)).toBeNull();
+  });
 });

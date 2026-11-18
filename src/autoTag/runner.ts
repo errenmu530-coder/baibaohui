@@ -46,6 +46,7 @@ import {
   stripImageTags,
 } from '@/st/imageTagRegex';
 import { getTagGenChannel, isCurrentChatExcluded, settings } from '@/state/settings';
+import { recordDiagnostic } from '@/state/diagnostics';
 
 const processed = new Set<string>();
 const running = new Map<string, AbortController>();
@@ -54,6 +55,12 @@ const scheduled = new Set<ReturnType<typeof setTimeout>>();
 const DIAGNOSTIC_PREFIX = '[BBI][AutoTagDebug]';
 
 function diagnostic(event: string, payload: unknown = null): void {
+  const fields = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const summary = ['floor', 'reason', 'selectedLength', 'sourceLength', 'segmentCount']
+    .filter(key => typeof fields[key] === 'string' || typeof fields[key] === 'number')
+    .map(key => `${key}=${String(fields[key])}`)
+    .join(' · ');
+  recordDiagnostic(event.includes('skip') ? 'warning' : 'info', event, summary);
   const seen = new WeakSet<object>();
   let detail: string;
   try {
@@ -244,6 +251,13 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
   }
   const rawSource = message.mes;
   const slot = opts.slot;
+  if (opts.selectedText && !selectedInsertion(rawSource, opts.selectedText)) {
+    abort(floor, 'selection-not-found', true, '无法在楼层原文中定位选中文字，请缩小选区或避开图片卡片', {
+      selectedLength: opts.selectedText.length,
+      sourceLength: rawSource.length,
+    });
+    return;
+  }
   // 单槽重写的目标:开跑时快照第 seq 条 tag 的原文,写回前用它确认 seq 指的还是同一条
   // (同提示词编辑弹窗的纪律)。正文这会儿已经没这条 tag = 期间被删/换 swipe,直接放弃。
   const slotRawTag = slot ? parseImageTags(rawSource)[slot.seq] : undefined;
@@ -547,6 +561,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       ? selectedInsertion(context.chat[floor]?.mes ?? '', opts.selectedText)
       : null;
     if (opts.selectedText && !selectedTarget) {
+      recordDiagnostic('warning', '选段写回失败', `第 ${floor} 楼 · 生成期间正文变化或选区无法定位`);
       toastr.warning('无法在楼层原文中唯一定位选中文字，未写入生图标签', '柏宝绘');
       return;
     }
@@ -633,6 +648,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       else clearAutoGenerateForFloor(chatId, floor);
     }
     console.info(`[柏宝绘] 第 ${floor} 楼放弃写入生图 tag：${result}`);
+    recordDiagnostic('warning', '生图标签写入失败', `第 ${floor} 楼 · ${result}`);
     // 单槽重写的放弃原因与全量不同:正文其它部分改没改不重要,关键是这一条 tag 被改过
     if (slot && result === 'build-failed') {
       toastr.warning('这张图的提示词在生成期间已被改动，本次没有覆盖它', '柏宝绘');
@@ -649,6 +665,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
     if (controller.signal.aborted) return;
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[柏宝绘] 第 ${floor} 楼自动生成 tag 失败`, error);
+    recordDiagnostic('error', '自动生成标签失败', `第 ${floor} 楼 · ${message}`);
     toastr.error(message, '柏宝绘自动 tag 失败');
   } finally {
     if (running.get(runKey) === controller) running.delete(runKey);
@@ -686,8 +703,12 @@ export async function requestFloorTags(floor: number, opts: { replace?: boolean 
 
 /** 为用户选中的这段楼层文字生成一张图。 */
 export async function requestSelectedTextTag(floor: number, text: string): Promise<void> {
-  const selectedText = text.trim().slice(0, 4000);
+  const selectedText = text.trim();
   if (!selectedText) return;
+  if (selectedText.length > 4000) {
+    toastr.warning('选中文字超过 4000 字，请缩小选区后重试', '柏宝绘');
+    return;
+  }
   await runForFloor(floor, { manual: true, selectedText });
 }
 

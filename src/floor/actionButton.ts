@@ -51,7 +51,7 @@ function showSelectionButton(): void {
   const body = anchorEl?.closest('.mes_text');
   const floor = Number(message?.getAttribute('mesid'));
   const story = getContext()?.chat?.[floor];
-  if (!text || text.length > 4000 || !message || !body || !focusEl ||
+  if (!text || !message || !body || !focusEl ||
     !body.contains(focusEl) || !isStoryMessage(story) || isCurrentChatExcluded() || !settings.enabled) {
     hideSelectionButton();
     return;
