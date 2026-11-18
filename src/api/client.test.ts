@@ -257,6 +257,13 @@ describe('validate:历史「成功」= 调用方验收通过', () => {
     expect(h.failLlm).not.toHaveBeenCalled();
   });
 
+  it('passes the request history id to downstream processing', async () => {
+    const onHistoryRecord = vi.fn();
+    await requestCompletion(channel, messages, { onHistoryRecord });
+    expect(onHistoryRecord).toHaveBeenCalledOnce();
+    expect(onHistoryRecord).toHaveBeenCalledWith(1);
+  });
+
   it('不传 validate → 维持旧行为:拿到文本即记成功', async () => {
     await expect(requestCompletion(channel, messages)).resolves.toBe('答案文本');
     expect(h.finishLlm).toHaveBeenCalledTimes(1);

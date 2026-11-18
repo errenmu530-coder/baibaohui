@@ -352,6 +352,7 @@ export function bindFloorHydration(): boolean {
     if (Number.isInteger(id) && id >= 0) scheduleHydration(current => hydrateMessage(id, current));
     else onVisibleReload();
   };
+  let activeChatId = ctx.getCurrentChatId?.() ?? '';
   const onFullReload = () => {
     clearAutoGenerateFlags();
     // A deleted/switched chat no longer owns in-flight generation work.
@@ -361,6 +362,17 @@ export function bindFloorHydration(): boolean {
     // 楼层号在新聊天里指向别的楼,已提示过的记录一并作废,否则新聊天里同号楼永久静默
     hiddenWarned.clear();
     scheduleHydration(hydrateAll, hydrateVisible);
+  };
+  const onChatChanged = () => {
+    const nextChatId = getContext()?.getCurrentChatId?.() ?? '';
+    if (nextChatId === activeChatId) {
+      // 同一聊天的 reloadCurrentChat 也会发 CHAT_CHANGED。写入后的自动出图
+      // 标记属于本聊天，不能当成切换聊天清掉。
+      scheduleHydration(hydrateAll, hydrateVisible);
+      return;
+    }
+    activeChatId = nextChatId;
+    onFullReload();
   };
 
   eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, onMessage);
@@ -372,7 +384,7 @@ export function bindFloorHydration(): boolean {
     eventSource.on(eventTypes.MORE_MESSAGES_LOADED, onVisibleReload);
   }
   eventSource.on(eventTypes.MESSAGE_DELETED, onFullReload);
-  eventSource.on(eventTypes.CHAT_CHANGED, onFullReload);
+  eventSource.on(eventTypes.CHAT_CHANGED, onChatChanged);
 
   scheduleHydration(hydrateAll, hydrateVisible);
 

@@ -10,6 +10,7 @@ import {
   patchLlmTokens,
   records,
   resetHistory,
+  setLlmOutcome,
   roughTokens,
   safeHistory,
   truncate,
@@ -111,6 +112,15 @@ describe('截断', () => {
 });
 
 describe('状态流转', () => {
+  it('records a successful request separately from failed insertion', () => {
+    const id = llm();
+    finishLlm(id, { response: '{"images":[]}', promptTokens: 12, completionTokens: 3, tokensEstimated: false });
+    setLlmOutcome(id, '未写入', '楼层正文无法定位', true);
+    const record = records[0] as LlmRecord;
+    expect(record.status).toBe('ok');
+    expect(record.outcome).toEqual({ label: '未写入', detail: '楼层正文无法定位', failed: true });
+  });
+
   it('finish 记成功并算耗时', () => {
     const id = llm();
     finishLlm(id, { response: 'ok', promptTokens: 12, completionTokens: 3, tokensEstimated: false });

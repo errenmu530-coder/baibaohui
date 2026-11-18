@@ -60,9 +60,15 @@ function duration(ms: number | null): string {
 
 function statusLabel(record: HistoryRecord): string {
   if (record.status === 'running') return '进行中';
+  if (record.kind === 'llm' && record.status === 'ok' && record.outcome) return record.outcome.label;
   if (record.status === 'ok') return '成功';
   if (record.status === 'aborted') return '已取消';
   return '失败';
+}
+
+function statusClass(record: HistoryRecord): string {
+  if (record.kind === 'llm' && record.outcome?.failed) return 'is-error';
+  return `is-${record.status}`;
 }
 
 function title(record: HistoryRecord): string {
@@ -140,6 +146,7 @@ function copyAll(record: HistoryRecord): void {
       ? `提示词 token：${tokenLabel(record)}`
       : '',
     record.error ? `错误：${record.error}` : '',
+    record.kind === 'llm' && record.outcome?.detail ? `后续处理：${record.outcome.detail}` : '',
   ].filter(Boolean);
   const body = segments(record).map(s => `--- ${s.label} ---\n${s.text}`);
   void copyText([...head, '', ...body].join('\n'), '记录已复制');
@@ -211,7 +218,7 @@ function copyDiagnostics(): void {
               {{ tokenLabel(record) }}
             </span>
             <span class="bbi-hist-time">{{ time(record.startedAt) }}</span>
-            <span class="bbi-prompt-state" :class="`is-${record.status}`">{{ statusLabel(record) }}</span>
+            <span class="bbi-prompt-state" :class="statusClass(record)">{{ statusLabel(record) }}</span>
           </span>
         </template>
 
@@ -220,6 +227,7 @@ function copyDiagnostics(): void {
         </div>
 
         <p v-if="record.error" class="bbi-hist-error">{{ record.error }}</p>
+        <p v-if="record.kind === 'llm' && record.outcome?.detail" class="bbi-field-hint">后续处理：{{ record.outcome.detail }}</p>
 
         <p
           v-if="record.kind === 'llm' && record.tokensEstimated && record.promptTokens !== null"

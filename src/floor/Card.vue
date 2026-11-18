@@ -8,7 +8,7 @@ import { effectiveOrientation, type Orientation } from '@/backends/size';
 import Icon from '@/components/Icon.vue';
 import { confirmDialog } from '@/components/confirm';
 import { backendStatus, decideSeed, generateImage, tagBlockReason } from '@/generate';
-import { consumeAutoGenerateWhenReady, shouldAutoGenerate } from '@/floor/autoGenerate';
+import { consumeAutoGenerate, peekAutoGenerate, shouldAutoGenerate } from '@/floor/autoGenerate';
 import { isCollapsed, setCollapsed } from '@/floor/collapseState';
 import { imageDownloadFileName, saveImageFile } from '@/floor/download';
 import {
@@ -537,18 +537,17 @@ function downloadCurrent(): void {
 watch(hash, current => reconcileGen(key.value, current), { immediate: true });
 
 function startMarkedGeneration(): void {
-  // AI 重写尚在途时不能消费标记：此时 runGenerate 会因 planning 直接返回。
-  // 重写结束或同锚点卡片只更新 props 时再检查，避免新 tag 已保存却不出图。
-  if (!props.chatId) return;
-  const mode = consumeAutoGenerateWhenReady(props.chatId, props.messageId, props.swipeId, props.seq, planning.value);
+  // 等待规划、在途生图和后端就绪。提前消费会使后续状态恢复时永久丢失自动出图。
+  if (!props.chatId || planning.value || busy.value || !canGenerate.value) return;
+  const mode = peekAutoGenerate(props.chatId, props.messageId, props.swipeId, props.seq);
   if (!mode) return;
+  consumeAutoGenerate(props.chatId, props.messageId, props.swipeId, props.seq);
   if (!shouldAutoGenerate(mode, phase.value)) return;
-  if (!canGenerate.value) return;
   void generate();
 }
 
 onMounted(startMarkedGeneration);
-watch([planning, () => props.tag], startMarkedGeneration, { flush: 'post' });
+watch([planning, () => props.tag, canGenerate, busy], startMarkedGeneration, { flush: 'post' });
 </script>
 
 <template>

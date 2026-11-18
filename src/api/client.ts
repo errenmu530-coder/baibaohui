@@ -54,6 +54,8 @@ function alternateUrl(url: string): string {
 
 export interface RequestOptions {
   signal?: AbortSignal;
+  /** 将本次请求的历史编号交给调用方，以便补记解析后的正文写入结果。 */
+  onHistoryRecord?: (id: number) => void;
   /**
    * 用途标签,只用于请求历史页的展示(如「自动 tag」)。
    * 不传也不影响请求本身,历史里显示为「未标注」。
@@ -264,6 +266,7 @@ async function requestCompletionAtUrl(
       messages,
     }),
   );
+  if (historyId !== null) safeHistory(() => opts.onHistoryRecord?.(historyId));
 
   try {
     const result = await withTimeout(timeoutSec, opts.signal, '副 API 请求', async signal => {
@@ -444,6 +447,7 @@ export async function requestViaMainApi(messages: ChatMsg[], opts: RequestOption
       messages,
     }),
   );
+  if (historyId !== null) safeHistory(() => opts.onHistoryRecord?.(historyId));
 
   try {
     const content = (await ctx.generateRaw({ prompt: messages, responseLength: MAIN_API_RESPONSE_LENGTH }))?.trim();

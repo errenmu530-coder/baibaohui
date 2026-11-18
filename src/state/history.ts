@@ -66,6 +66,8 @@ export interface LlmRecord extends BaseRecord {
    * 与副 API 渠道模型未必同源。故 UI 必须用 ≈ 区分,不能与真值混显。
    */
   tokensEstimated: boolean;
+  /** 自动 tag 等流程在请求成功后的处理结果；请求成功本身不代表已写入正文。 */
+  outcome: { label: string; detail: string; failed: boolean } | null;
 }
 
 export interface ImageRecord extends BaseRecord {
@@ -177,6 +179,7 @@ export function beginLlm(info: LlmBegin): number {
     promptTokens: null,
     completionTokens: null,
     tokensEstimated: false,
+    outcome: null,
   });
   return id;
 }
@@ -197,6 +200,13 @@ export function finishLlm(id: number, info: LlmFinish): void {
   record.promptTokens = info.promptTokens;
   record.completionTokens = info.completionTokens;
   record.tokensEstimated = info.tokensEstimated;
+}
+
+/** 补记请求后的写入结果。与 HTTP 状态分开，便于区分「模型成功」和「真正插入」。 */
+export function setLlmOutcome(id: number, label: string, detail = '', failed = false): void {
+  const record = find(id);
+  if (record?.kind !== 'llm') return;
+  record.outcome = { label, detail: truncate(detail), failed };
 }
 
 /**

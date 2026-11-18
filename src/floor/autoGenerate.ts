@@ -37,6 +37,16 @@ export function markForAutoGenerate(
   flags.set(key(chatId, messageId, swipeId, seq), mode);
 }
 
+/** 查看标记而不消费；卡片尚不能出图时应保留它。 */
+export function peekAutoGenerate(
+  chatId: string,
+  messageId: number,
+  swipeId: number,
+  seq: number,
+): AutoGenerateMode | null {
+  return flags.get(key(chatId, messageId, swipeId, seq)) ?? null;
+}
+
 /** 消费本槽位的自动生成标记:有则删除并返回其模式(只触发一次),无则 null。 */
 export function consumeAutoGenerate(
   chatId: string,

@@ -47,6 +47,7 @@ import {
 } from '@/st/imageTagRegex';
 import { getTagGenChannel, isCurrentChatExcluded, settings } from '@/state/settings';
 import { recordDiagnostic } from '@/state/diagnostics';
+import { safeHistory, setLlmOutcome } from '@/state/history';
 
 const processed = new Set<string>();
 const running = new Map<string, AbortController>();
@@ -339,6 +340,10 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
   running.get(runKey)?.abort();
   const controller = new AbortController();
   running.set(runKey, controller);
+  let lastHistoryId: number | null = null;
+  const outcome = (label: string, detail: string, failed = false): void => {
+    if (lastHistoryId !== null) safeHistory(() => setLlmOutcome(lastHistoryId!, label, detail, failed));
+  };
 
   try {
     const memory = readBookMemory(floor, context.chat[floor]?.mes ?? '', context.name1);
@@ -423,15 +428,18 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
             signal: controller.signal,
             source,
             validate,
+            onHistoryRecord: id => { lastHistoryId = id; },
           });
         } else {
           await requestViaMainApi(messages, {
             signal: controller.signal,
             source,
             validate,
+            onHistoryRecord: id => { lastHistoryId = id; },
           });
         }
         if (controller.signal.aborted) {
+          outcome('未写入', '请求返回后任务被取消，未修改楼层正文', true);
           processed.delete(identity);
           return;
         }
@@ -542,11 +550,14 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
 
     // 单槽重写没给出新提示词:保留原提示词与原图,不替换(空 images 不是错误)。
     if (slot && !plan.images.length) {
+      outcome('未修改', '模型没有给出新的图片提示词');
       toastr.info('模型没有给出新的提示词，本张保持原样', '柏宝绘');
       return;
     }
     // 没有图片、没有角色变化、也没有旧楼层变化要清理时,保持原来的无写入早退。
     if (!plan.images.length && !floorOps.length && !previousDelta) {
+      outcome('无需插图', '模型返回 0 张图片，且没有角色档案变更；因此没有写入标签或发起生图');
+      recordDiagnostic('info', '自动标签无需插图', `第 ${floor} 楼 · 模型返回 0 张图片`);
       if (opts.manual) toastr.info('模型认为本楼没有值得插图的画面', '柏宝绘');
       else console.debug(`[柏宝绘] 第 ${floor} 楼无需插图`);
       return;
@@ -561,6 +572,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       ? selectedInsertion(context.chat[floor]?.mes ?? '', opts.selectedText)
       : null;
     if (opts.selectedText && !selectedTarget) {
+      outcome('未写入', '选中文字无法在当前楼层原文中唯一定位', true);
       recordDiagnostic('warning', '选段写回失败', `第 ${floor} 楼 · 生成期间正文变化或选区无法定位`);
       toastr.warning('无法在楼层原文中唯一定位选中文字，未写入生图标签', '柏宝绘');
       return;
@@ -622,6 +634,13 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
           },
     );
     if (result === 'saved') {
+      outcome(
+        plan.images.length ? '已插入' : '已更新角色',
+        plan.images.length
+          ? `已向第 ${floor} 楼写入 ${plan.images.length} 个图片标签${marked ? '；已请求自动生图' : '；自动生图已关闭'}`
+          : `已更新第 ${floor} 楼角色档案，模型返回 0 张图片`,
+      );
+      recordDiagnostic('info', '生图标签已写入', `第 ${floor} 楼 · ${plan.images.length} 张 · 自动生图 ${marked ? '已标记' : '关闭'}`);
       if (slot) {
         toastr.success(`已重写第 ${slot.seq + 1} 张的提示词，正在按新提示词出图`, '柏宝绘');
         return;
@@ -648,6 +667,8 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       else clearAutoGenerateForFloor(chatId, floor);
     }
     console.info(`[柏宝绘] 第 ${floor} 楼放弃写入生图 tag：${result}`);
+    processed.delete(identity);
+    outcome('未写入', `模型请求成功，但第 ${floor} 楼正文写入失败：${result}；可以再次触发生成`, true);
     recordDiagnostic('warning', '生图标签写入失败', `第 ${floor} 楼 · ${result}`);
     // 单槽重写的放弃原因与全量不同:正文其它部分改没改不重要,关键是这一条 tag 被改过
     if (slot && result === 'build-failed') {
@@ -664,6 +685,7 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
     else clearAutoGenerateForFloor(chatId, floor);
     if (controller.signal.aborted) return;
     const message = error instanceof Error ? error.message : String(error);
+    outcome('未写入', `模型请求后处理出错：${message}`, true);
     console.error(`[柏宝绘] 第 ${floor} 楼自动生成 tag 失败`, error);
     recordDiagnostic('error', '自动生成标签失败', `第 ${floor} 楼 · ${message}`);
     toastr.error(message, '柏宝绘自动 tag 失败');
@@ -797,8 +819,12 @@ export function bindAutoTagging(): void {
       clearGeneration();
     });
   }
+  let activeChatId = context.getCurrentChatId?.() ?? '';
   context.eventSource.on(events.CHAT_CHANGED, (...args: unknown[]) => {
-    diagnostic('CHAT_CHANGED', { args, currentChatId: getContext()?.getCurrentChatId?.() ?? '' });
+    const currentChatId = getContext()?.getCurrentChatId?.() ?? '';
+    diagnostic('CHAT_CHANGED', { args, currentChatId, previousChatId: activeChatId });
+    if (currentChatId === activeChatId) return;
+    activeChatId = currentChatId;
     cancelAll();
   });
 }

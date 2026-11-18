@@ -6,6 +6,7 @@ import {
   consumeAutoGenerate,
   consumeAutoGenerateWhenReady,
   markForAutoGenerate,
+  peekAutoGenerate,
   shouldAutoGenerate,
   type AutoGeneratePhase,
 } from '@/floor/autoGenerate';
@@ -16,6 +17,15 @@ describe('auto generate flags', () => {
     markForAutoGenerate('chat1', 5, 0, 0);
     expect(consumeAutoGenerate('chat1', 5, 0, 0)).toBe('auto');
     expect(consumeAutoGenerate('chat1', 5, 0, 0)).toBe(null);
+  });
+
+  it('keeps the marker available while the card waits for its backend', () => {
+    clearAutoGenerateFlags();
+    markForAutoGenerate('chat1', 5, 0, 0, 'force');
+    expect(peekAutoGenerate('chat1', 5, 0, 0)).toBe('force');
+    expect(peekAutoGenerate('chat1', 5, 0, 0)).toBe('force');
+    expect(consumeAutoGenerate('chat1', 5, 0, 0)).toBe('force');
+    expect(peekAutoGenerate('chat1', 5, 0, 0)).toBe(null);
   });
 
   it('distinguishes slots by chat/message/swipe/seq', () => {
