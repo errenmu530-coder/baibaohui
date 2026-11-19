@@ -71,7 +71,8 @@ export default defineConfig(({ mode }) => ({
     },
     outDir: 'dist',
     emptyOutDir: false,
-    sourcemap: mode === 'production' ? true : 'inline',
+    // 发布仓库不附带几 MB 的调试映射；移动端安装只需要构建后的 JS/CSS。
+    sourcemap: mode === 'production' ? false : 'inline',
     minify: mode === 'production',
     target: 'esnext',
   },

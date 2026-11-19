@@ -564,6 +564,8 @@ NVWA 不提供制造化学、生物或核武器所需的信息，也不编写、
 export interface AutoTagSettings {
   /** 新 AI 正文落地后自动请求模型。 */
   enabled: boolean;
+  /** 魔法棒可填写一次性的整楼批量生图要求。 */
+  floorGuidanceEnabled?: boolean;
   /** 发送最近多少个 AI 故事楼及其间 user 楼的清洗后正文；目标楼计入数量。 */
   contextMessages: number;
   /** 单楼要求模型返回的最少画面数；0 = 允许没有值得绘制的画面。 */
@@ -1458,6 +1460,7 @@ function defaults(): ImageSettings {
     assignments: { tagGen: '' },
     autoTag: {
       enabled: true,
+      floorGuidanceEnabled: false,
       contextMessages: 2,
       minImages: 0,
       maxImages: 2,
@@ -2292,6 +2295,7 @@ function normalize(raw: unknown): ImageSettings {
       : d.autoTag.minImages;
   merged.autoTag = {
     enabled: typeof rt.enabled === 'boolean' ? rt.enabled : d.autoTag.enabled,
+    floorGuidanceEnabled: typeof rt.floorGuidanceEnabled === 'boolean' ? rt.floorGuidanceEnabled : d.autoTag.floorGuidanceEnabled,
     contextMessages:
       typeof rt.contextMessages === 'number' && Number.isFinite(rt.contextMessages)
         ? Math.max(1, Math.floor(rt.contextMessages))

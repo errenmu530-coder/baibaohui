@@ -675,6 +675,12 @@ async function confirmUpdate() {
         <p class="bbi-field-hint">AI 正文生成后自动判断该楼是否需要插图,需要就写入生图 tag。</p>
 
         <label class="bbi-switch-row">
+          <span class="bbi-field-label">魔法棒生图要求</span>
+          <input v-model="settings.autoTag.floorGuidanceEnabled" type="checkbox" class="bbi-checkbox" />
+        </label>
+        <p class="bbi-field-hint">开启后可从左下角魔法棒填写一次性要求，只用于下一次整楼批量生图；选段、单张提示词修改和整楼重新生成不使用。</p>
+
+        <label class="bbi-switch-row">
           <span class="bbi-field-label">自动生成图片</span>
           <input v-model="settings.autoTag.autoGenerate" type="checkbox" class="bbi-checkbox" />
         </label>

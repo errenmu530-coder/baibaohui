@@ -8,6 +8,7 @@ import {
 } from '@/autoTag/charAnchors';
 import { prepareTargetText } from '@/autoTag/clean';
 import { beginGeneration, clearGeneration, consumeGeneration } from '@/autoTag/generationGate';
+import { takeFloorGuidance } from '@/autoTag/floorGuidance';
 import { autoTagProfile, buildAutoTagMessages } from '@/autoTag/prompt';
 import { rebaseImagePositions, type RebaseReport } from '@/autoTag/rebase';
 import { buildSlotTaskNote } from '@/autoTag/slotPlan';
@@ -346,6 +347,9 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
   };
 
   try {
+    const floorGuidance = settings.autoTag.floorGuidanceEnabled && !opts.selectedText && !opts.slot && !opts.replace
+      ? takeFloorGuidance(chatId, floor)
+      : '';
     const memory = readBookMemory(floor, context.chat[floor]?.mes ?? '', context.name1);
     // 单槽重写:库文本要包含本楼已落档的增量(首次全量分析建的档),否则 AI 会把
     // 已建档角色当新人重写。charTagsBeforeFloor(floor + 1) 正好含本楼(swipe 匹配时生效)。
@@ -375,7 +379,9 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
       anchors.text,
       slot ? `${buildSlotTaskNote(rawSource, slot.seq)}${slot.instruction ? `\n\n【用户对这张图的修改要求，优先于角色库中的对应外貌字段】\n${slot.instruction}\n只在这一张图的提示词中落实修改；保留其余角色和画面要素，不提交角色库 changes。` : ''}` : opts.selectedText
         ? `【用户指定文字生图】只为以下选中文字生成恰好一张图片，不要自动挑选其他情节。选中文字：\n${opts.selectedText}`
-        : '',
+        : floorGuidance
+          ? `【用户对本楼批量图片的共同要求】\n${floorGuidance}\n本楼每张图片都必须满足这条要求；在画面和对应角色提示词中落实，不改写角色固定外貌档案。`
+          : '',
       profile,
     );
     const channel = getTagGenChannel();
