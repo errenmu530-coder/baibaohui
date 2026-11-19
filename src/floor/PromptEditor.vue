@@ -7,7 +7,7 @@ import BbiTextarea from '@/components/BbiTextarea.vue';
 import Icon from '@/components/Icon.vue';
 import ModalMask from '@/components/ModalMask.vue';
 import { activeOrientationLock } from '@/state/settings';
-import { getTagGenChannel } from '@/state/settings';
+import { getTagTranslationChannel } from '@/state/settings';
 import { requestCompletion, requestViaMainApi } from '@/api/client';
 import { containsTagMarkup, type ImageTagContent } from '@/st/imageTagRegex';
 import {
@@ -115,7 +115,7 @@ async function translateCurrentTags(): Promise<void> {
       { role: 'system' as const, content: '将生图英文 tag 逐项译成简短中文。只输出一个 JSON 字符串数组，顺序与输入完全一致，不添加解释。无法确定时输出空字符串。' },
       { role: 'user' as const, content: JSON.stringify(missing) },
     ];
-    const channel = getTagGenChannel();
+    const channel = getTagTranslationChannel();
     const raw = channel
       ? await requestCompletion(channel, messages, { source: 'tag 中文翻译' })
       : await requestViaMainApi(messages, { source: 'tag 中文翻译' });
@@ -138,6 +138,14 @@ function showLocalTags(): void {
   vocabularyResults.value = localTagSearch(vocabularyQuery.value, vocabularyCategory.value).slice(0, 100);
 }
 
+function resetVocabularySearch(): void {
+  vocabularyController?.abort();
+  vocabularyBusy.value = false;
+  vocabularyTranslating.value = false;
+  vocabularyError.value = '';
+  showLocalTags();
+}
+
 async function searchVocabulary(): Promise<void> {
   vocabularyController?.abort();
   const controller = new AbortController();
@@ -147,48 +155,56 @@ async function searchVocabulary(): Promise<void> {
   const input = vocabularyQuery.value.trim();
   if (!input) return;
   vocabularyBusy.value = true;
-  let englishQuery = input;
-  if (/[\u3400-\u9fff]/.test(input)) {
-    try {
-      const channel = getTagGenChannel();
-      const messages = [
-        { role: 'system' as const, content: '把用户输入的中文绘图元素转成一个最贴近的英文 Danbooru tag 搜索词。只输出英文词组，不输出解释、标点或多项。' },
-        { role: 'user' as const, content: input },
-      ];
-      englishQuery = (channel
-        ? await requestCompletion(channel, messages, { signal: controller.signal, source: '中文 tag 搜索' })
-        : await requestViaMainApi(messages, { signal: controller.signal, source: '中文 tag 搜索' }))
-        .trim().replace(/[^a-zA-Z0-9_ -]/g, '').slice(0, 80);
-    } catch (error) {
-      englishQuery = localTagSearch(input)[0]?.tag ?? '';
-      vocabularyError.value = `中文检索已回退到本地词库：${error instanceof Error ? error.message : String(error)}；`;
-    }
-  }
-  if (controller.signal.aborted) return;
-  if (!englishQuery) {
-    vocabularyBusy.value = false;
-    vocabularyError.value += '没有匹配到英文查询词，请换一种说法或输入英文。';
-    return;
-  }
-  const results = await Promise.allSettled([
-    searchNovelAiTags(englishQuery, controller.signal),
-    searchDanbooruTags(englishQuery, controller.signal),
-  ]);
-  if (controller.signal.aborted) return;
-  vocabularyBusy.value = false;
-  const seen = new Set<string>();
-  const merged: TagCandidate[] = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      for (const item of result.value) {
-        const key = `${item.source}:${item.tag.toLowerCase()}`;
-        if (!seen.has(key)) { seen.add(key); merged.push(item); }
+  try {
+    let englishQuery = input;
+    if (/[\u3400-\u9fff]/.test(input)) {
+      try {
+        const channel = getTagTranslationChannel();
+        const messages = [
+          { role: 'system' as const, content: '把用户输入的中文绘图元素转成一个最贴近的英文 Danbooru tag 搜索词。只输出英文词组，不输出解释、标点或多项。' },
+          { role: 'user' as const, content: input },
+        ];
+        englishQuery = (channel
+          ? await requestCompletion(channel, messages, { signal: controller.signal, source: '中文 tag 搜索' })
+          : await requestViaMainApi(messages, { signal: controller.signal, source: '中文 tag 搜索' }))
+          .trim().replace(/[^a-zA-Z0-9_ -]/g, '').slice(0, 80);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        englishQuery = localTagSearch(input)[0]?.tag ?? '';
+        vocabularyError.value = `中文检索已回退到本地词库：${error instanceof Error ? error.message : String(error)}；`;
       }
-    } else {
-      vocabularyError.value += `${result.reason instanceof Error ? result.reason.message : String(result.reason)}；`;
     }
+    if (controller.signal.aborted) return;
+    if (!englishQuery) {
+      vocabularyError.value += '没有匹配到英文查询词，请换一种说法或输入英文。';
+      return;
+    }
+    const results = await Promise.allSettled([
+      searchNovelAiTags(englishQuery, controller.signal),
+      searchDanbooruTags(englishQuery, controller.signal),
+    ]);
+    if (controller.signal.aborted) return;
+    const seen = new Set<string>();
+    const merged: TagCandidate[] = [];
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        for (const item of result.value) {
+          const key = `${item.source}:${item.tag.toLowerCase()}`;
+          if (!seen.has(key)) { seen.add(key); merged.push(item); }
+        }
+      } else {
+        vocabularyError.value += `${result.reason instanceof Error ? result.reason.message : String(result.reason)}；`;
+      }
+    }
+    vocabularyResults.value = [...vocabularyResults.value, ...merged.map(item => ({
+      ...item, zh: item.zh || translatedByAi.value[item.tag] || '',
+    }))];
+    if (merged.some(item => !item.zh && !translatedByAi.value[item.tag])) {
+      await translateSearchResults(controller.signal);
+    }
+  } finally {
+    if (vocabularyController === controller) vocabularyBusy.value = false;
   }
-  vocabularyResults.value = [...vocabularyResults.value, ...merged];
 }
 
 function addVocabularyTag(item: TagCandidate): void {
@@ -200,20 +216,20 @@ function addVocabularyTag(item: TagCandidate): void {
   else characters.value[Number(target)].tag = next;
 }
 
-async function translateSearchResults(): Promise<void> {
+async function translateSearchResults(signal?: AbortSignal): Promise<void> {
   const names = [...new Set(vocabularyResults.value.filter(item => !item.zh).map(item => item.tag))].slice(0, 80);
   if (!names.length) return;
   vocabularyTranslating.value = true;
-  vocabularyError.value = '';
   try {
     const messages = [
       { role: 'system' as const, content: '将英文绘图 tag 按顺序译成简短中文。只输出一个 JSON 字符串数组，顺序与输入完全一致，不添加解释。无法确定时输出空字符串。' },
       { role: 'user' as const, content: JSON.stringify(names) },
     ];
-    const channel = getTagGenChannel();
+    const channel = getTagTranslationChannel();
     const raw = channel
-      ? await requestCompletion(channel, messages, { source: '候选 tag 中文翻译' })
-      : await requestViaMainApi(messages, { source: '候选 tag 中文翻译' });
+      ? await requestCompletion(channel, messages, { signal, source: '候选 tag 中文翻译' })
+      : await requestViaMainApi(messages, { signal, source: '候选 tag 中文翻译' });
+    if (signal?.aborted) return;
     const parsed: unknown = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
     if (!Array.isArray(parsed) || parsed.length !== names.length || !parsed.every(item => typeof item === 'string')) {
       throw new Error('翻译结果格式不符合预期');
@@ -222,9 +238,9 @@ async function translateSearchResults(): Promise<void> {
     vocabularyResults.value = vocabularyResults.value.map(item => ({ ...item, zh: item.zh || translations.get(item.tag) || '' }));
     for (const [name, zh] of translations) if (zh) translatedByAi.value[name] = zh;
   } catch (error) {
-    vocabularyError.value = `候选词翻译失败：${error instanceof Error ? error.message : String(error)}`;
+    if (!signal?.aborted) vocabularyError.value += `候选词自动翻译失败：${error instanceof Error ? error.message : String(error)}；可点「翻译候选词」重试。`;
   } finally {
-    vocabularyTranslating.value = false;
+    if (!signal?.aborted) vocabularyTranslating.value = false;
   }
 }
 
@@ -466,14 +482,14 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="vocabularyOpen" class="bbi-vocabulary">
-        <p class="bbi-editor-note">英文 tag 会加入所选提示词；中文只供阅读，不会发给生图模型。中文搜索会先调用生成 tag 的 AI 转成英文，再查 NovelAI 与 Danbooru；在线候选词需要联网。</p>
+        <p class="bbi-editor-note">搜索会自动查询 NovelAI 与 Danbooru，并按「设置 → 副 API → tag 中文翻译使用」翻译未收录词。中文只供阅读；加入提示词的仍是英文 tag。</p>
         <div class="bbi-vocabulary-controls">
-          <input v-model="vocabularyQuery" class="bbi-input" type="search" placeholder="搜中文或英文，例如：靴子 / boots" @keydown.enter.prevent="searchVocabulary" @input="showLocalTags" />
-          <button class="bbi-btn bbi-btn-sm" type="button" :disabled="vocabularyBusy" @click="searchVocabulary">{{ vocabularyBusy ? '查询中…' : '搜索两家词库' }}</button>
-          <button class="bbi-btn bbi-btn-sm" type="button" :disabled="vocabularyTranslating || vocabularyBusy" @click="translateSearchResults">{{ vocabularyTranslating ? '翻译中…' : '翻译候选词' }}</button>
+          <input v-model="vocabularyQuery" class="bbi-input" type="search" placeholder="搜中文或英文，例如：靴子 / boots" @keydown.enter.prevent="searchVocabulary" @input="resetVocabularySearch" />
+          <button class="bbi-btn bbi-btn-sm" type="button" :disabled="vocabularyBusy" @click="searchVocabulary">{{ vocabularyTranslating ? '正在翻译…' : vocabularyBusy ? '查询中…' : '搜索两家词库' }}</button>
+          <button class="bbi-btn bbi-btn-sm" type="button" :disabled="vocabularyTranslating || vocabularyBusy" @click="translateSearchResults()">翻译候选词</button>
         </div>
         <div class="bbi-vocabulary-categories">
-          <button v-for="category in ['', ...TAG_CATEGORIES]" :key="category" class="bbi-btn bbi-btn-sm" type="button" :aria-pressed="vocabularyCategory === category" @click="vocabularyCategory = category; showLocalTags()">{{ category || '全部' }}</button>
+          <button v-for="category in ['', ...TAG_CATEGORIES]" :key="category" class="bbi-btn bbi-btn-sm" type="button" :aria-pressed="vocabularyCategory === category" @click="vocabularyCategory = category; resetVocabularySearch()">{{ category || '全部' }}</button>
         </div>
         <label class="bbi-field-hint">添加到：
           <select v-model="vocabularyTarget" class="bbi-input">

@@ -1146,8 +1146,8 @@ export interface ImageSettings {
   nai: NaiSettings;
   /** 副 API 渠道列表(镜像共享存储;真身在 extensionSettings['baibai_api_channels']) */
   channels: ApiChannel[];
-  /** 任务指派的渠道 id。tagGen=生成画图 tag;空串=跟随主 API。 */
-  assignments: { tagGen: string };
+  /** 生成 tag 与中文翻译各自的渠道指派；翻译默认跟随生成 tag 的副 API。 */
+  assignments: { tagGen: string; tagTranslateMode: 'tagGen' | 'separate'; tagTranslate: string };
   /** 自动判断并向正文插入生图 tag。 */
   autoTag: AutoTagSettings;
   /** 排除设置(镜像共享存储;真身在 extensionSettings['baibai_exclude_settings'])。 */
@@ -1457,7 +1457,7 @@ function defaults(): ImageSettings {
     comfyui: comfyDefaults(),
     nai: naiDefaults(),
     channels: [],
-    assignments: { tagGen: '' },
+    assignments: { tagGen: '', tagTranslateMode: 'tagGen', tagTranslate: '' },
     autoTag: {
       enabled: true,
       floorGuidanceEnabled: false,
@@ -1528,6 +1528,14 @@ export function getTagGenChannel(): ApiChannel | null {
   const id = settings.assignments.tagGen;
   if (!id) return null;
   return settings.channels.find(c => c.id === id) ?? null;
+}
+
+/** 中文搜索词、候选 tag 和现有 tag 的翻译渠道。独立模式必须显式指定渠道。 */
+export function getTagTranslationChannel(): ApiChannel | null {
+  if (settings.assignments.tagTranslateMode !== 'separate') return getTagGenChannel();
+  const channel = settings.channels.find(c => c.id === settings.assignments.tagTranslate);
+  if (!channel) throw new Error('请在柏宝绘「设置 → 副 API」指定翻译专用渠道');
+  return channel;
 }
 
 /**
@@ -2280,8 +2288,12 @@ function normalize(raw: unknown): ImageSettings {
   // 副 API 渠道:逐个补全字段并校验类型
   merged.channels = (Array.isArray(r.channels) ? r.channels : []).map(normalizeChannel);
   // 任务指派:嵌套对象,逐字段兜底(老数据没有 assignments 键时回退空串=跟随主 API)
-  const ra = (r.assignments ?? {}) as Partial<{ tagGen: string }>;
-  merged.assignments = { tagGen: typeof ra.tagGen === 'string' ? ra.tagGen : '' };
+  const ra = (r.assignments ?? {}) as Partial<ImageSettings['assignments']>;
+  merged.assignments = {
+    tagGen: typeof ra.tagGen === 'string' ? ra.tagGen : '',
+    tagTranslateMode: ra.tagTranslateMode === 'separate' ? 'separate' : 'tagGen',
+    tagTranslate: typeof ra.tagTranslate === 'string' ? ra.tagTranslate : '',
+  };
   const rt = (r.autoTag ?? {}) as Partial<AutoTagSettings>;
   // 存量配置只有 maxImages:缺少 minImages 时回落 0,完整保留「没好画面可以不出图」的旧行为。
   // 先归一化上限,再把下限夹进 [0,上限],保证所有后续调用都能直接依赖范围不变式。
@@ -2435,6 +2447,9 @@ function applySharedChannels(store: SharedChannelsStore): void {
   const ids = new Set(settings.channels.map(channel => channel.id));
   if (settings.assignments.tagGen && !ids.has(settings.assignments.tagGen)) {
     settings.assignments.tagGen = '';
+  }
+  if (settings.assignments.tagTranslate && !ids.has(settings.assignments.tagTranslate)) {
+    settings.assignments.tagTranslate = '';
   }
 }
 

@@ -92,11 +92,28 @@ const TAG_GEN_OPTIONS = computed(() => [
   { value: '', label: '跟随主 API' },
   ...settings.channels.map(c => ({ value: c.id, label: c.name || '未命名渠道' })),
 ]);
+const tagTranslateModeSel = computed<string>({
+  get: () => settings.assignments.tagTranslateMode,
+  set: v => (settings.assignments.tagTranslateMode = v === 'separate' ? 'separate' : 'tagGen'),
+});
+const TAG_TRANSLATE_MODE_OPTIONS = [
+  { value: 'tagGen', label: '跟随生成 tag 的副 API' },
+  { value: 'separate', label: '使用独立翻译 API' },
+];
+const tagTranslateSel = computed<string>({
+  get: () => settings.assignments.tagTranslate,
+  set: v => (settings.assignments.tagTranslate = v),
+});
+const TAG_TRANSLATE_OPTIONS = computed(() => [
+  { value: '', label: '请选择翻译渠道' },
+  ...settings.channels.map(c => ({ value: c.id, label: c.name || '未命名渠道' })),
+]);
 
 /* —— 渠道:列表只读展示,编辑/新建都在弹窗里进行,避免一长列表平铺误触。
    渠道列表与柏宝书共享(见 state/settings.ts 的共享存储),任一端改动自动同步。 —— */
 // editingId:正在编辑的「已有渠道」id;新建时为 null。仅用于「完成」时定位写回目标。
 const editingId = ref<string | null>(null);
+const assignTranslationOnSave = ref(false);
 // 编辑用「草稿副本」:v-model 全改在草稿上,只有点「完成」才写回 settings(避免每敲一字就触发存盘)。
 // 弹窗开关也以它为准:草稿存在 = 弹窗打开。
 const editingChannel = ref<ApiChannel | null>(null);
@@ -221,9 +238,15 @@ const excludeParamsText = computed<string>({
 });
 
 function addChannel() {
+  assignTranslationOnSave.value = false;
   showKey.value = false;
   editingId.value = null; // null = 新建,完成时 push
   editingChannel.value = newChannel(); // 草稿,尚未进 settings
+}
+function addTranslationChannel() {
+  addChannel();
+  if (editingChannel.value) editingChannel.value.name = 'Tag 中文翻译';
+  assignTranslationOnSave.value = true;
 }
 function openChannel(id: string) {
   const src = settings.channels.find(c => c.id === id);
@@ -234,6 +257,7 @@ function openChannel(id: string) {
 }
 /** 取消(× / 点遮罩):丢弃草稿,不写回 settings(无论新建还是编辑,改动都作废)。 */
 function closeChannel() {
+  assignTranslationOnSave.value = false;
   showKey.value = false;
   editingId.value = null;
   editingChannel.value = null;
@@ -254,7 +278,9 @@ function confirmChannel() {
     } else {
       list.push(draft);
     }
+    if (assignTranslationOnSave.value) settings.assignments.tagTranslate = draft.id;
   }
+  assignTranslationOnSave.value = false;
   showKey.value = false;
   editingId.value = null;
   editingChannel.value = null;
@@ -266,6 +292,7 @@ function askRemoveChannel() {
 }
 function confirmRemoveChannel() {
   confirmDeleteOpen.value = false;
+  assignTranslationOnSave.value = false;
   // 删除针对「已有渠道」(editingId);新建草稿尚未入库,等同直接丢弃草稿
   if (editingId.value) removeChannel(editingId.value);
   editingId.value = null;
@@ -275,8 +302,9 @@ function removeChannel(id: string) {
   const list = settings.channels;
   const idx = list.findIndex(c => c.id === id);
   if (idx >= 0) list.splice(idx, 1);
-  // 清理指派:生成 tag 若指派了该渠道则清空(回落跟随主 API)
+  // 清理已删除渠道的任务指派。
   if (settings.assignments.tagGen === id) settings.assignments.tagGen = '';
+  if (settings.assignments.tagTranslate === id) settings.assignments.tagTranslate = '';
 }
 
 const testing = ref<Record<string, string>>({});
@@ -637,14 +665,23 @@ async function confirmUpdate() {
 
       <!-- 副 API:生成画图 tag 用的模型渠道(与柏宝书共享渠道列表) -->
       <Collapsible title="副 API" :open="false">
-        <!-- 任务指派:只有一个任务——生成 tag -->
+        <!-- 生成 tag 与中文翻译分别指派渠道。 -->
         <div class="bbi-field bbi-assign">
           <div class="bbi-assign-row">
             <span class="bbi-field-label">生成 tag 使用</span>
             <BbiSelect v-model="tagGenSel" :options="TAG_GEN_OPTIONS" aria-label="生成 tag 使用的 API 渠道" />
           </div>
+          <div class="bbi-assign-row">
+            <span class="bbi-field-label">tag 中文翻译使用</span>
+            <BbiSelect v-model="tagTranslateModeSel" :options="TAG_TRANSLATE_MODE_OPTIONS" aria-label="tag 中文翻译 API 模式" />
+          </div>
+          <div v-if="settings.assignments.tagTranslateMode === 'separate'" class="bbi-assign-row">
+            <span class="bbi-field-label">翻译专用渠道</span>
+            <BbiSelect v-model="tagTranslateSel" :options="TAG_TRANSLATE_OPTIONS" aria-label="tag 中文翻译专用 API 渠道" />
+            <button class="bbi-btn bbi-btn-sm" type="button" @click="addTranslationChannel()">添加翻译渠道</button>
+          </div>
         </div>
-        <p class="bbi-field-hint">不指派渠道时跟随主 API:直接借用你主界面当前正在用的 API(聊天补全/文本补全)来生成画图 tag,无需额外配置。想用不同模型再在下方建副渠道指派。渠道列表与柏宝书共享,任一端改动都会自动同步到另一端。</p>
+        <p class="bbi-field-hint">翻译默认跟随「生成 tag 使用」的渠道；若生成 tag 也未指派渠道，两者都跟随主 API。选「使用独立翻译 API」后，需指定已有渠道或添加翻译渠道。中文搜索词、搜索结果和现有 tag 的翻译都按这里的设置发送。渠道列表与柏宝书共享。</p>
 
         <hr class="bbi-rule" />
 

@@ -57,7 +57,7 @@ export async function searchNovelAiTags(query: string, signal?: AbortSignal): Pr
   const response = await fetch(url, { headers: { Authorization: `Bearer ${endpoint.key.trim()}` }, signal });
   if (!response.ok) throw new Error(`NovelAI 候选词请求失败：HTTP ${response.status}`);
   const data = await response.json() as { tags?: Array<{ tag?: unknown; count?: unknown; confidence?: unknown }> };
-  return (Array.isArray(data.tags) ? data.tags : []).slice(0, 50).flatMap(item => {
+  return (Array.isArray(data.tags) ? data.tags : []).slice(0, 30).flatMap(item => {
     const tag = normalizeRemoteTag(item.tag);
     return tag ? [{
       tag, zh: tagTranslation(tag), category: byTag.get(tag.toLowerCase())?.category ?? '',
@@ -76,7 +76,8 @@ export async function searchDanbooruTags(query: string, signal?: AbortSignal): P
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`Danbooru 候选词请求失败：HTTP ${response.status}`);
   const data = await response.json() as Array<{ name?: unknown; post_count?: unknown; category?: unknown }>;
-  return (Array.isArray(data) ? data : []).flatMap(item => {
+  // 通配搜索会返回大量没有作品的冷门/拼接词；只给用户看实际被使用的候选。
+  return (Array.isArray(data) ? data : []).filter(item => typeof item.post_count === 'number' && item.post_count > 0).slice(0, 30).flatMap(item => {
     const tag = normalizeRemoteTag(item.name);
     return tag ? [{
       tag, zh: tagTranslation(tag), category: byTag.get(tag.toLowerCase())?.category ?? '',
