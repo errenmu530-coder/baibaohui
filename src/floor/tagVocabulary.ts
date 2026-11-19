@@ -1,4 +1,4 @@
-import { activeNaiEndpoint, activeNaiPlan, isOfficialNaiEndpoint } from '@/state/settings';
+import { activeNaiPlan, isOfficialNaiEndpoint, settings } from '@/state/settings';
 
 export interface TagCandidate {
   tag: string;
@@ -46,8 +46,8 @@ function normalizeRemoteTag(value: unknown): string {
 }
 
 export async function searchNovelAiTags(query: string, signal?: AbortSignal): Promise<TagCandidate[]> {
-  const endpoint = activeNaiEndpoint();
-  if (!isOfficialNaiEndpoint(endpoint.id) || !endpoint.key.trim()) {
+  const endpoint = settings.nai.endpoints.find(item => isOfficialNaiEndpoint(item.id));
+  if (!endpoint?.key.trim()) {
     throw new Error('NovelAI 官方候选词需要在渠道中配置官方接入点与密钥');
   }
   const url = new URL('/ai/generate-image/suggest-tags', endpoint.url);

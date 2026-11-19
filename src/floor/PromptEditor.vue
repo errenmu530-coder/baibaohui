@@ -200,6 +200,34 @@ function addVocabularyTag(item: TagCandidate): void {
   else characters.value[Number(target)].tag = next;
 }
 
+async function translateSearchResults(): Promise<void> {
+  const names = [...new Set(vocabularyResults.value.filter(item => !item.zh).map(item => item.tag))].slice(0, 80);
+  if (!names.length) return;
+  vocabularyTranslating.value = true;
+  vocabularyError.value = '';
+  try {
+    const messages = [
+      { role: 'system' as const, content: '将英文绘图 tag 按顺序译成简短中文。只输出一个 JSON 字符串数组，顺序与输入完全一致，不添加解释。无法确定时输出空字符串。' },
+      { role: 'user' as const, content: JSON.stringify(names) },
+    ];
+    const channel = getTagGenChannel();
+    const raw = channel
+      ? await requestCompletion(channel, messages, { source: '候选 tag 中文翻译' })
+      : await requestViaMainApi(messages, { source: '候选 tag 中文翻译' });
+    const parsed: unknown = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+    if (!Array.isArray(parsed) || parsed.length !== names.length || !parsed.every(item => typeof item === 'string')) {
+      throw new Error('翻译结果格式不符合预期');
+    }
+    const translations = new Map(names.map((name, index) => [name, String(parsed[index]).trim().slice(0, 60)]));
+    vocabularyResults.value = vocabularyResults.value.map(item => ({ ...item, zh: item.zh || translations.get(item.tag) || '' }));
+    for (const [name, zh] of translations) if (zh) translatedByAi.value[name] = zh;
+  } catch (error) {
+    vocabularyError.value = `候选词翻译失败：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    vocabularyTranslating.value = false;
+  }
+}
+
 /**
  * 当前渠道的画幅锁(null = 未锁,见 settings.ts 的 activeOrientationLock)。
  * 锁定时方向按钮显示锁定值并禁用:出图一律按锁走(generate.ts),这里再让人选只是个
@@ -442,6 +470,7 @@ onBeforeUnmount(() => {
         <div class="bbi-vocabulary-controls">
           <input v-model="vocabularyQuery" class="bbi-input" type="search" placeholder="搜中文或英文，例如：靴子 / boots" @keydown.enter.prevent="searchVocabulary" @input="showLocalTags" />
           <button class="bbi-btn bbi-btn-sm" type="button" :disabled="vocabularyBusy" @click="searchVocabulary">{{ vocabularyBusy ? '查询中…' : '搜索两家词库' }}</button>
+          <button class="bbi-btn bbi-btn-sm" type="button" :disabled="vocabularyTranslating || vocabularyBusy" @click="translateSearchResults">{{ vocabularyTranslating ? '翻译中…' : '翻译候选词' }}</button>
         </div>
         <div class="bbi-vocabulary-categories">
           <button v-for="category in ['', ...TAG_CATEGORIES]" :key="category" class="bbi-btn bbi-btn-sm" type="button" :aria-pressed="vocabularyCategory === category" @click="vocabularyCategory = category; showLocalTags()">{{ category || '全部' }}</button>
